@@ -1,0 +1,3439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Story Plot Tool</title>
+<style>
+  html, body, #root { margin: 0; padding: 0; height: 100%; background: #fdfdfc; }
+  * { box-sizing: border-box; }
+  #load-error { display:none; font-family: monospace; white-space: pre-wrap; padding: 20px; color: #a33; background: #fff4f4; }
+</style>
+</head>
+<body>
+<div id="root"><div style="padding:24px;font-family:system-ui,sans-serif;color:#888;">Loading Story Plot Tool…</div></div>
+<div id="load-error"></div>
+
+<script>
+  window.addEventListener('error', function (e) {
+    var el = document.getElementById('load-error');
+    el.style.display = 'block';
+    el.textContent += 'Error: ' + e.message + (e.filename ? (' (' + e.filename + ':' + e.lineno + ')') : '') + '\n';
+  });
+</script>
+
+<script>
+  function loadScript(url, fallbackUrl) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = url;
+      s.onload = resolve;
+      s.onerror = function () {
+        if (fallbackUrl) {
+          var s2 = document.createElement('script');
+          s2.src = fallbackUrl;
+          s2.onload = resolve;
+          s2.onerror = reject;
+          document.head.appendChild(s2);
+        } else {
+          reject(new Error('Failed to load ' + url));
+        }
+      };
+      document.head.appendChild(s);
+    });
+  }
+
+  Promise.resolve()
+    .then(function () { return loadScript(
+      'https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js',
+      'https://unpkg.com/react@18/umd/react.production.min.js'); })
+    .then(function () { return loadScript(
+      'https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js',
+      'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js'); })
+    .then(function () { return loadScript(
+      'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js',
+      'https://unpkg.com/@babel/standalone/babel.min.js'); })
+    .then(function () {
+      var script = document.getElementById('app-source');
+      var transformed = Babel.transform(script.textContent, { presets: ['react'] }).code;
+      var el = document.createElement('script');
+      el.textContent = transformed;
+      document.body.appendChild(el);
+    })
+    .catch(function (err) {
+      var el = document.getElementById('load-error');
+      el.style.display = 'block';
+      el.textContent += 'Load failure: ' + err.message + '\n';
+    });
+</script>
+
+<script type="text/babel-source" id="app-source">
+const { useState, useEffect, useRef, useMemo } = React;
+
+function MiniLineChart({ data, keys, height = 280, zones = null, dimmed = [], onToggleDim = null }) {
+  const width = 760;
+  const padL = 40, padR = 16, padT = 16, padB = 30;
+  const innerW = width - padL - padR, innerH = height - padT - padB;
+  if (!data || data.length === 0) return null;
+
+  let allVals = [];
+  data.forEach(row => keys.forEach(k => { if (typeof row[k.key] === 'number') allVals.push(row[k.key]); }));
+  if (allVals.length === 0) allVals = [0, 1];
+  let min = Math.min(...allVals, 0), max = Math.max(...allVals, 0);
+  if (min === max) { min -= 1; max += 1; }
+  const xForI = (i) => padL + (data.length <= 1 ? 0 : (innerW * i) / (data.length - 1));
+  const yForV = (v) => padT + innerH - ((v - min) / (max - min)) * innerH;
+  const xForFrac = (f) => padL + innerW * f;
+
+  const [hoverIdx, setHoverIdx] = useState(null);
+
+  return (
+    <div style={{ width: '100%', overflowX: 'auto' }}>
+      <svg width={width} height={height} onMouseLeave={() => setHoverIdx(null)}>
+        {zones && data.length > 1 && zones.map(z => (
+          <g key={z.label}>
+            {z.fill !== 'transparent' && (
+              <rect x={xForFrac(z.from)} y={padT} width={xForFrac(z.to) - xForFrac(z.from)} height={innerH} fill={z.fill} />
+            )}
+            <text x={(xForFrac(z.from) + xForFrac(z.to)) / 2} y={padT + 12} fontSize={9} textAnchor="middle" fill="#999"
+              style={{ textTransform: 'uppercase', letterSpacing: '.02em' }}>{z.label}</text>
+          </g>
+        ))}
+        {[0, 0.25, 0.5, 0.75, 1].map((f, i) => {
+          const y = padT + innerH * f;
+          const val = (max - (max - min) * f).toFixed(1);
+          return (
+            <g key={i}>
+              <line x1={padL} y1={y} x2={width - padR} y2={y} stroke="#eee" />
+              <text x={padL - 6} y={y + 3} fontSize={10} textAnchor="end" fill="#999">{val}</text>
+            </g>
+          );
+        })}
+        {data.map((row, i) => (
+          <rect key={i} x={xForI(i) - (innerW / data.length) / 2} y={padT} width={innerW / data.length} height={innerH}
+            fill="transparent" onMouseEnter={() => setHoverIdx(i)} />
+        ))}
+        {keys.map(k => {
+          const path = data.map((row, i) => {
+            if (row[k.key] == null) return null;
+            return `${i === 0 || data[i - 1][k.key] == null ? 'M' : 'L'} ${xForI(i)} ${yForV(row[k.key])}`;
+          }).filter(Boolean).join(' ');
+          return <path key={k.key} d={path} fill="none" stroke={k.color} strokeWidth={2} strokeDasharray={k.dash || undefined}
+            opacity={dimmed.includes(k.key) ? 0.2 : 1} />;
+        })}
+        {hoverIdx != null && (
+          <line x1={xForI(hoverIdx)} y1={padT} x2={xForI(hoverIdx)} y2={padT + innerH} stroke="#ccc" strokeDasharray="3 3" />
+        )}
+      </svg>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, marginTop: 4 }}>
+        {keys.map(k => (
+          <span key={k.key} onClick={() => onToggleDim && onToggleDim(k.key)}
+            style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: onToggleDim ? 'pointer' : 'default', opacity: dimmed.includes(k.key) ? 0.35 : 1, userSelect: 'none' }}>
+            <span style={{ width: 10, height: 10, background: k.color, display: 'inline-block', borderRadius: 2 }} />
+            {k.name || k.key}
+          </span>
+        ))}
+      </div>
+      {hoverIdx != null && data[hoverIdx] && (
+        <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+          {data[hoverIdx].name}: {keys.map(k => `${k.name || k.key}=${data[hoverIdx][k.key] ?? '—'}`).join('  ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/* ============================== CONSTANTS ============================== */
+
+const ACT_COLORS = { 1: '#eef3fb', 2: '#fbf7ea', 3: '#fbf0e3', 4: '#fbeaea', 5: '#f3eefb' };
+// Stable hash so a thread's color depends on its name, not its position in the threads array —
+// deleting/reordering other threads no longer shifts everyone else's color.
+function hashColorIndex(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return h;
+}
+const ACT_BORDERS = { 1: '#aac1ec', 2: '#ecda9d', 3: '#ecc399', 4: '#e8a8a8', 5: '#cbb2ec' };
+const UNASSIGNED_COLOR = '#f0eeec';
+const UNASSIGNED_BORDER = '#c9c4bd';
+const ACT_NAMES = { 1: 'Act I', 2: 'Act II', 3: 'Act III', 4: 'Act IV', 5: 'Act V' };
+const ACTS = [1, 2, 3, 4, 5];
+
+const BOLD_PALETTE = [
+  { name: 'Blue', hex: '#86a6e4' },
+  { name: 'Yellow', hex: '#e4cb74' },
+  { name: 'Orange', hex: '#e4ab71' },
+  { name: 'Red', hex: '#de8484' },
+  { name: 'Purple', hex: '#b692e4' },
+];
+const SOFT_PALETTE = [
+  { name: 'Sage', hex: '#9fd1a3' },
+  { name: 'Aqua', hex: '#82d1c9' },
+  { name: 'Rose', hex: '#eea6c3' },
+  { name: 'Lime', hex: '#cbdc8f' },
+  { name: 'Stone', hex: '#cdc5b8' },
+];
+const THREAD_COLOR_PALETTE = [
+  { name: 'Violet', hex: '#7F77DD' },
+  { name: 'Coral', hex: '#D85A30' },
+  { name: 'Teal', hex: '#1D9E75' },
+  { name: 'Pink', hex: '#D4537E' },
+  { name: 'Amber', hex: '#BA7517' },
+  { name: 'Blue', hex: '#378ADD' },
+  { name: 'Green', hex: '#639922' },
+  { name: 'Gray', hex: '#888780' },
+];
+const THREAD_COLORS = THREAD_COLOR_PALETTE.map(p => p.hex);
+
+const CIRCLE_STAGES = ['You', 'Need', 'Go', 'Search', 'Find', 'Take', 'Return', 'Change'];
+
+// Freytag's Pyramid, as background context bands on the Character Arcs chart — not a per-character
+// value, just the classic dramatic-structure shape (short exposition, long rising action, a narrow
+// climax, falling action, a short resolution). Proportions are a reasonable default, not tuned per story.
+const FREYTAG_ZONES = [
+  { label: 'Exposition', from: 0, to: 0.15, fill: '#f2f2f2' },
+  { label: 'Rising Action', from: 0.15, to: 0.70, fill: 'transparent' },
+  { label: 'Climax', from: 0.70, to: 0.78, fill: '#f6f0fb' },
+  { label: 'Falling Action', from: 0.78, to: 0.92, fill: 'transparent' },
+  { label: 'Resolution', from: 0.92, to: 1, fill: '#f2f2f2' },
+];
+
+// (Emotion/Action/Theme tag types removed — tag type is now free text the user defines, see tagTypes lib.)
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+}
+
+function freshDefaultChapters() {
+  return [{ id: uid(), title: 'Chapter 1' }];
+}
+
+function freshDefaultCards(chapterId) {
+  const mk = (title, act, placeholder) => ({
+    id: uid(), act, gapIndex: null, chapterId, title, text: '', notes: '',
+    tags: [], values: [], placeholder, customColor: null, major: false,
+  });
+  return [
+    mk('Beginning', 1, 'What is the status quo before the story begins?'),
+    mk('Inciting Incident', 1, 'What event disrupts the status quo and sets the story in motion?'),
+    mk('Rising Action', 2, 'What complications escalate the conflict?'),
+    mk('Climax', 3, 'What is the peak confrontation or decision?'),
+    mk('Falling Action', 4, 'What are the immediate consequences of the climax?'),
+    mk('Resolution', 5, 'How does the story settle?'),
+    mk('Loose Ends', 5, 'What threads resolve or remain deliberately open?'),
+  ];
+}
+
+// Filters a card list down to one chapter, or returns all cards when chapterId is 'all'.
+function filterByChapter(cards, chapterId) {
+  return chapterId === 'all' ? cards : cards.filter(c => c.chapterId === chapterId);
+}
+
+const GENERIC_PLACEHOLDER = 'What change turns the plot?';
+
+/* ============================== COLOR RESOLUTION ============================== */
+
+function darkenHex(hex, amt) {
+  const h = hex.replace('#', '');
+  const num = parseInt(h, 16);
+  let r = (num >> 16) & 255, g = (num >> 8) & 255, b = num & 255;
+  r = Math.max(0, Math.round(r * (1 - amt)));
+  g = Math.max(0, Math.round(g * (1 - amt)));
+  b = Math.max(0, Math.round(b * (1 - amt)));
+  return '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+
+function resolveColor(card) {
+  if (card.customColor) return card.customColor;
+  if (card.act) return ACT_COLORS[card.act];
+  return UNASSIGNED_COLOR;
+}
+function resolveBorder(card) {
+  if (card.customColor) return darkenHex(card.customColor, 0.3);
+  if (card.act) return ACT_BORDERS[card.act];
+  return UNASSIGNED_BORDER;
+}
+
+/* ============================== VALUE CHAIN ============================== */
+
+// When `chapters` is given, orders chapter-by-chapter then act-by-act within each chapter.
+// Otherwise falls back to a flat act-only ordering (used once cards are already scoped to one chapter).
+function getOrderedForValues(cards, chapters) {
+  if (chapters && chapters.length) {
+    return chapters.flatMap(ch => ACTS.flatMap(act => cards.filter(c => c.chapterId === ch.id && c.act === act)));
+  }
+  return ACTS.flatMap(act => cards.filter(c => c.act === act));
+}
+
+// Chronological position of every card: chapter order, then act order, then array order; unplaced cards last.
+function chronoOrderMap(cards, chapters) {
+  const placed = getOrderedForValues(cards, chapters);
+  const seen = new Set(placed.map(c => c.id));
+  const m = {};
+  [...placed, ...cards.filter(c => !seen.has(c.id))].forEach((c, i) => { m[c.id] = i; });
+  return m;
+}
+// Sorts thread steps by story position and numbers them 1..n.
+function numberThreadSteps(steps, order) {
+  return [...steps].sort((a, b) => (order[a.cardId] ?? 1e9) - (order[b.cardId] ?? 1e9)).map((s, i) => ({ ...s, step: i + 1 }));
+}
+
+// Reorders `arr` by moving the card at idx by `dir` positions. If the moved card is
+// currently unassigned, it adopts the act of its new neighbor(s) (before takes priority).
+function nudgeWithActAdoption(arr, idx, dir) {
+  const j = idx + dir;
+  if (j < 0 || j >= arr.length) return arr;
+  const next = [...arr];
+  [next[idx], next[j]] = [next[j], next[idx]];
+  const moved = next[j];
+  if (moved.act === null || moved.act === undefined) {
+    const before = next[j - 1];
+    const after = next[j + 1];
+    const inherited = before ? before.act : (after ? after.act : null);
+    if (inherited !== null && inherited !== undefined) next[j] = { ...moved, act: inherited };
+  }
+  return next;
+}
+
+function buildValueChain(cards, chapters) {
+  const ordered = getOrderedForValues(cards, chapters);
+  const openMap = {};
+  const chain = {};
+  ordered.forEach(card => {
+    chain[card.id] = {};
+    (card.values || []).forEach(v => {
+      const open = openMap[v.name] !== undefined ? openMap[v.name] : 0;
+      const close = open + (v.shift || 0);
+      chain[card.id][v.name] = { open, close, isEvent: (v.shift || 0) !== 0 };
+      openMap[v.name] = close;
+    });
+  });
+  return { chain, ordered };
+}
+
+/* ============================== MARKDOWN EXPORT / IMPORT ============================== */
+
+function esc(s) { return (s || '').replace(/\n/g, '\\n'); }
+function unesc(s) { return (s || '').replace(/\\n/g, '\n'); }
+
+function cardsToMarkdown(state) {
+  const { cards, characters, themes, values, threads, chapters, tagTypes, threadNotes, threadColors, threadLanes, circleStages, circleStagesHidden, wordGoal, title } = state;
+  let md = '# STORY PLOT DATA\n\n';
+  md += '## Title\n- ' + esc(title || '') + '\n\n';
+  md += '## Chapters\n' + (chapters || []).map(ch => `- ${ch.id} | ${esc(ch.title)}`).join('\n') + '\n\n';
+  md += '## Characters\n' + characters.map(c => `- ${c}`).join('\n') + '\n\n';
+  md += '## Themes\n' + themes.map(c => `- ${c}`).join('\n') + '\n\n';
+  md += '## Values\n' + values.map(c => `- ${c}`).join('\n') + '\n\n';
+  md += '## Threads\n' + threads.map(c => `- ${c}`).join('\n') + '\n\n';
+  md += '## ThreadNotes\n' + threads.map(t => `- ${esc(t)} | ${esc((threadNotes && threadNotes[t]) || '')}`).join('\n') + '\n\n';
+  md += '## ThreadColors\n' + threads.filter(t => threadColors && threadColors[t]).map(t => `- ${esc(t)} | ${threadColors[t]}`).join('\n') + '\n\n';
+  md += '## ThreadLanes\n' + threads.filter(t => threadLanes && threadLanes[t] !== undefined).map(t => `- ${esc(t)} | ${threadLanes[t]}`).join('\n') + '\n\n';
+  md += '## TagTypes\n' + (tagTypes || []).map(c => `- ${c}`).join('\n') + '\n\n';
+  md += '## CircleStages\n' + ((circleStages && circleStages.length === 8) ? circleStages : CIRCLE_STAGES).map(c => `- ${esc(c)}`).join('\n') + '\n\n';
+  md += '## CircleStagesHidden\n- ' + (!!circleStagesHidden) + '\n\n';
+  md += '## WordGoal\n- ' + (wordGoal || '') + '\n\n';
+  md += '## Cards\n\n';
+  cards.forEach(card => {
+    md += `### ${esc(card.title)}\n`;
+    md += `- id: ${card.id}\n`;
+    md += `- chapterId: ${card.chapterId || ''}\n`;
+    md += `- act: ${card.act === null || card.act === undefined ? '' : card.act}\n`;
+    md += `- gapIndex: ${card.gapIndex === null || card.gapIndex === undefined ? '' : card.gapIndex}\n`;
+    md += `- major: ${!!card.major}\n`;
+    md += `- color: ${card.customColor || ''}\n`;
+    md += `- words: ${card.words ?? ''}\n`;
+    md += `- wordTarget: ${card.wordTarget ?? ''}\n`;
+    md += `- placeholder: ${esc(card.placeholder || '')}\n`;
+    md += `- text: ${esc(card.text)}\n`;
+    md += `- notes: ${esc(card.notes)}\n`;
+    md += `- tags:\n`;
+    (card.tags || []).forEach(t => {
+      if (t.type === 'Thread') {
+        md += `  - Thread | ${t.role} | ${esc(t.note)} | \n`;
+      } else {
+        md += `  - ${t.type} | ${esc(t.char || '')} | ${t.direction || 'up'} | ${esc(t.note || '')}\n`;
+      }
+    });
+    md += `- values:\n`;
+    (card.values || []).forEach(v => { md += `  - ${esc(v.name)} | ${v.shift}\n`; });
+    md += '\n---\n\n';
+  });
+  return md;
+}
+
+function markdownToCards(md) {
+  const lines = md.split('\n');
+  const characters = [], themes = [], values = [], threads = [], chapters = [], tagTypes = [], circleStages = [];
+  const threadNotes = {}; const threadColors = {}; const threadLanes = {};
+  let circleStagesHidden = false;
+  let wordGoal = null;
+  let title = '';
+  const cards = [];
+  let section = null;
+  let current = null;
+  let listMode = null; // 'tags' | 'values'
+
+  const pushCurrent = () => { if (current) cards.push(current); current = null; };
+
+  for (let raw of lines) {
+    const line = raw;
+    const h2 = line.match(/^##\s+(.*)$/);
+    const h3 = line.match(/^###\s+(.*)$/);
+    if (h2) {
+      pushCurrent();
+      const name = h2[1].trim().toLowerCase();
+      if (name === 'title') section = 'title';
+      else if (name === 'chapters') section = 'chapters';
+      else if (name === 'characters') section = 'characters';
+      else if (name === 'themes') section = 'themes';
+      else if (name === 'values') section = 'values';
+      else if (name === 'threads') section = 'threads';
+      else if (name === 'threadnotes') section = 'threadNotes';
+      else if (name === 'threadcolors') section = 'threadColors';
+      else if (name === 'threadlanes') section = 'threadLanes';
+      else if (name === 'tagtypes') section = 'tagTypes';
+      else if (name === 'circlestages') section = 'circleStages';
+      else if (name === 'circlestageshidden') section = 'circleStagesHidden';
+      else if (name === 'wordgoal') section = 'wordGoal';
+      else if (name === 'cards') section = 'cards';
+      else section = null;
+      listMode = null;
+      continue;
+    }
+    if (h3 && section === 'cards') {
+      pushCurrent();
+      current = {
+        id: uid(), act: null, gapIndex: null, chapterId: null, title: unesc(h3[1].trim()), text: '', notes: '',
+        tags: [], values: [], placeholder: GENERIC_PLACEHOLDER, customColor: null, major: false,
+      };
+      listMode = null;
+      continue;
+    }
+    if (section === 'chapters') {
+      const m = line.match(/^-\s+(.*)$/);
+      if (m && m[1].trim()) {
+        const parts = m[1].split('|').map(s => s.trim());
+        chapters.push({ id: parts[0], title: unesc(parts[1] || parts[0]) });
+      }
+      continue;
+    }
+    if (section === 'cards' && current) {
+      let m;
+      if ((m = line.match(/^- id:\s*(.*)$/))) { if (m[1].trim()) current.id = m[1].trim(); listMode = null; continue; }
+      if ((m = line.match(/^- chapterId:\s*(.*)$/))) { current.chapterId = m[1].trim() || null; listMode = null; continue; }
+      if ((m = line.match(/^- act:\s*(.*)$/))) { const v = m[1].trim(); current.act = v ? parseInt(v, 10) : null; listMode = null; continue; }
+      if ((m = line.match(/^- gapIndex:\s*(.*)$/))) { const v = m[1].trim(); current.gapIndex = v ? parseInt(v, 10) : null; listMode = null; continue; }
+      if ((m = line.match(/^- major:\s*(.*)$/))) { current.major = m[1].trim() === 'true'; listMode = null; continue; }
+      if ((m = line.match(/^- words:\s*(.*)$/))) { current.words = parseWords(m[1]); listMode = null; continue; }
+      if ((m = line.match(/^- wordTarget:\s*(.*)$/))) { current.wordTarget = parseWords(m[1]); listMode = null; continue; }
+      if ((m = line.match(/^- color:\s*(.*)$/))) { current.customColor = m[1].trim() || null; listMode = null; continue; }
+      if ((m = line.match(/^- placeholder:\s*(.*)$/))) { current.placeholder = unesc(m[1]) || GENERIC_PLACEHOLDER; listMode = null; continue; }
+      if ((m = line.match(/^- text:\s*(.*)$/))) { current.text = unesc(m[1]); listMode = null; continue; }
+      if ((m = line.match(/^- notes:\s*(.*)$/))) { current.notes = unesc(m[1]); listMode = null; continue; }
+      if (line.match(/^- tags:\s*$/)) { listMode = 'tags'; continue; }
+      if (line.match(/^- values:\s*$/)) { listMode = 'values'; continue; }
+      if (listMode === 'tags' && (m = line.match(/^\s{2}-\s*(.*)$/))) {
+        const parts = m[1].split('|').map(s => s.trim());
+        if (parts[0] === 'Thread') {
+          const tag = { id: uid(), type: 'Thread', role: parts[1], note: unesc(parts[2] || '') };
+          current.tags.push(tag);
+        } else {
+          current.tags.push({ id: uid(), type: parts[0], char: unesc(parts[1] || ''), direction: parts[2] || 'up', note: unesc(parts[3] || '') });
+        }
+        continue;
+      }
+      if (listMode === 'values' && (m = line.match(/^\s{2}-\s*(.*)$/))) {
+        const parts = m[1].split('|').map(s => s.trim());
+        current.values.push({ name: unesc(parts[0]), shift: parseFloat(parts[1]) || 0 });
+        continue;
+      }
+      if (line.trim() === '---') { pushCurrent(); listMode = null; continue; }
+      continue;
+    }
+    if (section === 'threadNotes') {
+      const m = line.match(/^-\s+(.*)$/);
+      if (m && m[1].trim()) {
+        const parts = m[1].split('|');
+        const name = unesc(parts[0].trim());
+        const note = unesc((parts.slice(1).join('|') || '').trim());
+        threadNotes[name] = note;
+      }
+      continue;
+    }
+    if (section === 'threadColors') {
+      const m = line.match(/^-\s+(.*)$/);
+      if (m && m[1].trim()) {
+        const parts = m[1].split('|').map(s => s.trim());
+        if (parts[1]) threadColors[unesc(parts[0])] = parts[1];
+      }
+      continue;
+    }
+    if (section === 'threadLanes') {
+      const m = line.match(/^-\s+(.*)$/);
+      if (m && m[1].trim()) {
+        const parts = m[1].split('|').map(s => s.trim());
+        if (parts[1] !== undefined && parts[1] !== '') threadLanes[unesc(parts[0])] = parseInt(parts[1], 10);
+      }
+      continue;
+    }
+    if (section === 'title') {
+      const m = line.match(/^-\s+(.*)$/);
+      if (m && m[1].trim()) title = unesc(m[1].trim());
+      continue;
+    }
+    if (section === 'wordGoal') {
+      const m = line.match(/^-\s+(.*)$/);
+      if (m && m[1].trim()) wordGoal = parseWords(m[1]);
+      continue;
+    }
+    if (section === 'circleStagesHidden') {
+      const m = line.match(/^-\s+(.*)$/);
+      if (m && m[1].trim()) circleStagesHidden = m[1].trim() === 'true';
+      continue;
+    }
+    if (section && section !== 'cards') {
+      const m = line.match(/^-\s+(.*)$/);
+      if (m && m[1].trim()) {
+        if (section === 'characters') characters.push(m[1].trim());
+        else if (section === 'themes') themes.push(m[1].trim());
+        else if (section === 'values') values.push(m[1].trim());
+        else if (section === 'threads') threads.push(m[1].trim());
+        else if (section === 'tagTypes') tagTypes.push(m[1].trim());
+        else if (section === 'circleStages') circleStages.push(unesc(m[1].trim()));
+      }
+    }
+  }
+  pushCurrent();
+  // Backward compatibility: older exports have no Chapters section / no chapterId on cards.
+  let finalChapters = chapters;
+  if (finalChapters.length === 0) {
+    finalChapters = [{ id: uid(), title: 'Chapter 1' }];
+  }
+  const fallbackChapterId = finalChapters[0].id;
+  cards.forEach(c => { if (!c.chapterId) c.chapterId = fallbackChapterId; });
+  // Backward compatibility: older exports predate the TagTypes lib — derive it from tags in use.
+  const finalTagTypes = tagTypes.length > 0 ? tagTypes : Array.from(new Set(
+    cards.flatMap(c => (c.tags || []).filter(t => t.type !== 'Thread').map(t => t.type))
+  ));
+  // Backward compatibility: older exports predate stage labels — fall back to the defaults.
+  const finalCircleStages = circleStages.length === 8 ? circleStages : CIRCLE_STAGES;
+  return { cards, characters, themes, values, threads, tagTypes: finalTagTypes, threadNotes, threadColors, threadLanes, chapters: finalChapters, circleStages: finalCircleStages, circleStagesHidden, wordGoal, title };
+}
+
+/* ============================== SMALL UI PRIMITIVES ============================== */
+
+function ChipBar({ label, items, onAdd, onRemove }) {
+  const [val, setVal] = useState('');
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '8px 0' }}>
+      <span style={{ fontSize: 12, fontWeight: 600, color: '#666', minWidth: 90 }}>{label}</span>
+      {items.map(it => (
+        <span key={it} style={{ background: '#eee', borderRadius: 12, padding: '3px 10px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+          {it}
+          <button onClick={() => onRemove(it)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#999', fontSize: 12, padding: 0 }}>×</button>
+        </span>
+      ))}
+      <input
+        value={val}
+        onChange={e => setVal(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && val.trim()) { onAdd(val.trim()); setVal(''); } }}
+        placeholder={`Add ${label.toLowerCase().replace(/:$/, '')}...`}
+        style={{ border: '1px solid #ddd', borderRadius: 8, fontSize: 13, padding: '3px 8px', width: 140 }}
+      />
+    </div>
+  );
+}
+
+function ActBadge({ act }) {
+  if (!act) return <span style={{ fontSize: 11, background: UNASSIGNED_COLOR, border: `1px solid ${UNASSIGNED_BORDER}`, borderRadius: 6, padding: '2px 8px', color: '#888' }}>Unassigned</span>;
+  return <span style={{ fontSize: 11, background: ACT_COLORS[act], border: `1px solid ${ACT_BORDERS[act]}`, borderRadius: 6, padding: '2px 8px', color: '#555' }}>{ACT_NAMES[act]}</span>;
+}
+
+function ActSelect({ act, onChange }) {
+  return (
+    <select value={act === null || act === undefined ? '' : act}
+      onChange={e => onChange(e.target.value ? parseInt(e.target.value, 10) : null)}
+      style={{
+        fontSize: 11, background: act ? ACT_COLORS[act] : UNASSIGNED_COLOR,
+        border: `1px solid ${act ? ACT_BORDERS[act] : UNASSIGNED_BORDER}`, borderRadius: 6,
+        padding: '2px 6px', color: '#555', cursor: 'pointer',
+      }}>
+      <option value="">Unassigned</option>
+      {ACTS.map(a => <option key={a} value={a}>{ACT_NAMES[a]}</option>)}
+    </select>
+  );
+}
+
+function ColorSwatchPicker({ value, onChange, palette = [...BOLD_PALETTE, ...SOFT_PALETTE] }) {
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+      {palette.map((p, i) => (
+        <React.Fragment key={p.hex}>
+          <button onClick={() => onChange(value === p.hex ? null : p.hex)} title={p.name}
+            style={{
+              width: 22, height: 22, borderRadius: '50%', background: p.hex, cursor: 'pointer',
+              border: value === p.hex ? '3px solid #333' : '1px solid #ccc',
+            }} />
+          {palette[0] === BOLD_PALETTE[0] && i === BOLD_PALETTE.length - 1 && palette.length > BOLD_PALETTE.length && <div style={{ flexBasis: '100%', height: 0 }} />}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+/* ============================== SEGMENTED CONTROL ============================== */
+
+function SegButtons({ value, onChange, options }) {
+  return (
+    <div style={{ display: 'inline-flex', border: '1px solid #ccc', borderRadius: 6, overflow: 'hidden', fontSize: 12 }}>
+      {options.map(([val, label], i) => (
+        <button key={val} type="button" onClick={() => onChange(val)}
+          style={{
+            border: 'none', borderLeft: i > 0 ? '1px solid #ccc' : 'none',
+            background: value === val ? '#333' : '#fff', color: value === val ? '#fff' : '#555',
+            padding: '3px 10px', cursor: 'pointer', font: 'inherit',
+          }}>{label}</button>
+      ))}
+    </div>
+  );
+}
+
+/* ============================== TAG EDITOR ============================== */
+
+function TagEditor({ tags, onChange, characters, threads, onAddThread, tagTypes, onAddTagType }) {
+  const [kind, setKind] = useState('label'); // 'label' | 'thread'
+  const [labelType, setLabelType] = useState('');
+  const [selChars, setSelChars] = useState([]);
+  const [direction, setDirection] = useState('up');
+  const [note, setNote] = useState('');
+  const [role, setRole] = useState('setup');
+  const [threadName, setThreadName] = useState('');
+
+  const addTags = () => {
+    if (kind === 'thread') {
+      const name = threadName.trim();
+      if (!name) return;
+      if (!threads.includes(name)) onAddThread(name);
+      const tag = { id: uid(), type: 'Thread', role, note: name };
+      onChange([...tags, tag]);
+      setThreadName('');
+    } else {
+      const typeName = labelType.trim();
+      if (!typeName || selChars.length === 0) return;
+      if (!tagTypes.includes(typeName)) onAddTagType(typeName);
+      const additions = selChars.map(c => ({ id: uid(), type: typeName, char: c, direction, note }));
+      onChange([...tags, ...additions]);
+      setSelChars([]); setNote('');
+    }
+  };
+  const removeTag = (id) => onChange(tags.filter(t => t.id !== id));
+  const threadTagLabel = (t) => t.role === 'step' ? 'Step' : (t.role === 'setup' ? 'Setup' : 'Payoff');
+
+  return (
+    <div style={{ fontSize: 12, border: '1px solid #eee', borderRadius: 8, padding: 8, marginTop: 6 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+        {tags.map(t => (
+          <span key={t.id} style={{ background: '#f4f4f4', borderRadius: 10, padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 4 }}>
+            {t.type === 'Thread'
+              ? `Thread: ${t.note} (${threadTagLabel(t)})`
+              : `${t.type}: ${t.char} ${t.direction === 'up' ? '↑' : '↓'}${t.note ? ' — ' + t.note : ''}`}
+            <button onClick={() => removeTag(t.id)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#999' }}>×</button>
+          </span>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <SegButtons value={kind} onChange={setKind} options={[['label', 'Tag'], ['thread', 'Thread']]} />
+        {kind === 'label' ? (
+          <>
+            <input list="tag-type-lib" value={labelType} onChange={e => setLabelType(e.target.value)} placeholder="tag name..." style={{ width: 100, fontSize: 12 }} />
+            <datalist id="tag-type-lib">{tagTypes.map(t => <option key={t} value={t} />)}</datalist>
+            {characters.length === 0 && <span style={{ color: '#999' }}>Add characters above first</span>}
+            {characters.map(c => (
+              <label key={c} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <input type="checkbox" checked={selChars.includes(c)}
+                  onChange={e => setSelChars(e.target.checked ? [...selChars, c] : selChars.filter(x => x !== c))} />
+                {c}
+              </label>
+            ))}
+            <SegButtons value={direction} onChange={setDirection} options={[['up', '↑'], ['down', '↓']]} />
+            <input value={note} onChange={e => setNote(e.target.value)} placeholder="note" style={{ width: 90, fontSize: 12 }} />
+          </>
+        ) : (
+          <>
+            <SegButtons value={role} onChange={setRole} options={[['setup', 'Setup'], ['step', 'Step'], ['payoff', 'Payoff']]} />
+            <input list="thread-lib" value={threadName} onChange={e => setThreadName(e.target.value)} placeholder="thread name" style={{ width: 110, fontSize: 12 }} />
+            <datalist id="thread-lib">{threads.map(t => <option key={t} value={t} />)}</datalist>
+          </>
+        )}
+        <button onClick={addTags} style={{ fontSize: 12, border: '1px solid #ccc', borderRadius: 6, padding: '2px 8px', cursor: 'pointer' }}>+ Add</button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================== VALUE EDITOR ============================== */
+
+function ValueEditor({ cardValues, onChange, valuesLib }) {
+  const active = cardValues.map(v => v.name);
+  const toggle = (name) => {
+    if (active.includes(name)) onChange(cardValues.filter(v => v.name !== name));
+    else onChange([...cardValues, { name, shift: 0 }]);
+  };
+  const setShift = (name, shift) => onChange(cardValues.map(v => v.name === name ? { ...v, shift } : v));
+
+  if (valuesLib.length === 0) return null;
+  return (
+    <div style={{ fontSize: 12, marginTop: 6 }}>
+      {valuesLib.length === 1 ? (
+        <ShiftRow name={valuesLib[0]} shift={(cardValues.find(v => v.name === valuesLib[0]) || {}).shift || 0}
+          onSet={s => onChange([{ name: valuesLib[0], shift: s }])} />
+      ) : (
+        valuesLib.map(name => (
+          <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <input type="checkbox" checked={active.includes(name)} onChange={() => toggle(name)} />
+              {name}
+            </label>
+            {active.includes(name) && (
+              <ShiftRow name={name} shift={(cardValues.find(v => v.name === name) || {}).shift || 0} onSet={s => setShift(name, s)} bare />
+            )}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+function DeleteIcon({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 20 20" style={{ display: 'block' }}>
+      <circle cx="10" cy="10" r="10" fill="#DD5240" />
+      <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Native window.confirm() is unreliable in embedded/sandboxed contexts (some block it outright,
+// silently swallowing the click). This arms on first click and fires on a second click within 3s,
+// so delete always works and still can't happen by accident.
+// Small inline explanatory note, shown only when the global Help toggle is on.
+function HelpNote({ on, children, style }) {
+  if (!on) return null;
+  return (
+    <div style={{
+      fontSize: 11, color: '#8a8a8a', background: '#f7f6f4', border: '1px solid #eee', borderRadius: 6,
+      padding: '5px 8px', lineHeight: 1.4, maxWidth: 340, marginTop: 4, marginBottom: 6, ...style,
+    }}>{children}</div>
+  );
+}
+
+function DeleteButton({ onDelete, label = 'Delete this card' }) {
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(false), 3000);
+    return () => clearTimeout(t);
+  }, [confirming]);
+  return (
+    <button
+      onClick={() => { if (confirming) { setConfirming(false); onDelete(); } else { setConfirming(true); } }}
+      title={confirming ? `Click again to confirm — ${label}` : label}
+      style={{
+        border: 'none', background: 'none', cursor: 'pointer', padding: 1, display: 'inline-flex',
+        alignItems: 'center', borderRadius: '50%', boxShadow: confirming ? '0 0 0 2px #DD5240' : 'none',
+      }}>
+      <DeleteIcon />
+    </button>
+  );
+}
+
+function ShiftRow({ shift, onSet }) {
+  return (
+    <span>
+      shift: <input type="number" value={shift} onChange={e => onSet(parseFloat(e.target.value) || 0)} style={{ width: 50, fontSize: 12 }} />
+    </span>
+  );
+}
+
+/* ============================== SHARED CARD FIELDS ============================== */
+/* Used by the Scene list AND the Flowchart/Circle edit popups, so a card looks and
+   behaves identically everywhere: same colour, same content, same functions. */
+
+function CardFields({
+  card, updateCard, characters, threads, valuesLib, onAddThread, tagTypes, onAddTagType,
+  showNudgeDelete = false, onNudge, onDelete, nudgeDisabled = {}, notesOpenByDefault = false,
+}) {
+  return (
+    <div style={{ border: `1px solid ${resolveBorder(card)}`, background: resolveColor(card), borderRadius: 10, padding: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+          <ActSelect act={card.act} onChange={act => updateCard({ act })} />
+          {card.major && <span title="Major turning point" style={{ fontSize: 13 }}>★</span>}
+          <input value={card.title} onChange={e => updateCard({ title: e.target.value })}
+            style={{ fontWeight: 600, fontSize: 15, border: 'none', background: 'transparent', flex: 1, minWidth: 0 }} />
+        </div>
+        {showNudgeDelete && (
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button onClick={() => onNudge(-1)} disabled={!!nudgeDisabled.up} style={{ ...btnStyle, opacity: nudgeDisabled.up ? 0.35 : 1 }}>↑</button>
+            <button onClick={() => onNudge(1)} disabled={!!nudgeDisabled.down} style={{ ...btnStyle, opacity: nudgeDisabled.down ? 0.35 : 1 }}>↓</button>
+            <DeleteButton onDelete={onDelete} />
+          </div>
+        )}
+      </div>
+      <textarea value={card.text} onChange={e => updateCard({ text: e.target.value })}
+        placeholder={card.placeholder || GENERIC_PLACEHOLDER}
+        style={{ width: '100%', minHeight: 44, marginTop: 6, fontSize: 13, border: '1px solid #eee', borderRadius: 6, padding: 6, boxSizing: 'border-box' }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontSize: 12, color: '#777' }}>
+        <span>Words</span>
+        <input type="number" min="0" value={card.words ?? ''} onChange={e => updateCard({ words: parseWords(e.target.value) })} style={{ width: 80, fontSize: 12 }} />
+      </div>
+      <TagEditor tags={card.tags} onChange={t => updateCard({ tags: t })} characters={characters} threads={threads} onAddThread={onAddThread} tagTypes={tagTypes} onAddTagType={onAddTagType} />
+      <ValueEditor cardValues={card.values} onChange={v => updateCard({ values: v })} valuesLib={valuesLib} />
+      <div style={{ marginTop: 8 }}>
+        <div style={{ fontSize: 11, color: '#777', marginBottom: 4 }}>Colour override</div>
+        <ColorSwatchPicker value={card.customColor} onChange={color => updateCard({ customColor: color })} />
+      </div>
+      <details style={{ marginTop: 6 }} open={notesOpenByDefault}>
+        <summary style={{ fontSize: 12, color: '#777', cursor: 'pointer' }}>Notes / commentary</summary>
+        <textarea value={card.notes} onChange={e => updateCard({ notes: e.target.value })}
+          placeholder="Paste quote + citation, or write commentary notes here..."
+          style={{ width: '100%', minHeight: 60, marginTop: 4, fontSize: 13, border: '1px solid #eee', borderRadius: 6, padding: 6, boxSizing: 'border-box' }} />
+      </details>
+    </div>
+  );
+}
+
+function CardEditModal({ card, cards, onClose, updateCard, onNudge, onDelete, characters, threads, valuesLib, onAddThread, tagTypes, onAddTagType }) {
+  const idx = cards.findIndex(c => c.id === card.id);
+  const canUp = idx > 0;
+  const canDown = idx >= 0 && idx < cards.length - 1;
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
+      onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 630, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}>
+        <CardFields
+          card={card} updateCard={updateCard} characters={characters} threads={threads} valuesLib={valuesLib} onAddThread={onAddThread}
+          tagTypes={tagTypes} onAddTagType={onAddTagType}
+          showNudgeDelete onNudge={onNudge} onDelete={() => { onDelete(); onClose(); }}
+          nudgeDisabled={{ up: !canUp, down: !canDown }} notesOpenByDefault
+        />
+      </div>
+    </div>
+  );
+}
+
+/* ============================== SCENE (WRITE) VIEW ============================== */
+
+function SceneView({ state, setState, chapterFilter, help }) {
+  const { cards, characters, themes, values, threads, chapters, tagTypes } = state;
+  const [showUnassignedOnly, setShowUnassignedOnly] = useState(false);
+
+  const defaultChapterId = chapterFilter !== 'all' ? chapterFilter : (chapters[0] && chapters[0].id) || null;
+
+  const updateCard = (id, patch) => setState(s => ({ ...s, cards: s.cards.map(c => c.id === id ? { ...c, ...patch } : c) }));
+  const removeCard = (id) => setState(s => ({ ...s, cards: s.cards.filter(c => c.id !== id) }));
+  const addCard = () => setState(s => {
+    const arr = [...s.cards];
+    let insertAt = arr.length;
+    if (defaultChapterId) {
+      for (let i = arr.length - 1; i >= 0; i--) { if (arr[i].chapterId === defaultChapterId) { insertAt = i + 1; break; } }
+    }
+    arr.splice(insertAt, 0, { id: uid(), act: null, gapIndex: null, chapterId: defaultChapterId, title: 'New Card', text: '', notes: '', tags: [], values: [], placeholder: GENERIC_PLACEHOLDER, customColor: null, major: false });
+    return { ...s, cards: arr };
+  });
+  const nudge = (idx, dir) => setState(s => ({ ...s, cards: nudgeWithActAdoption(s.cards, idx, dir) }));
+  const insertCardAt = (afterIndex) => setState(s => {
+    const arr = [...s.cards];
+    const before = arr[afterIndex];
+    const after = arr[afterIndex + 1];
+    const inheritedAct = before ? before.act : (after ? after.act : null);
+    const inheritedChapter = before ? before.chapterId : (after ? after.chapterId : defaultChapterId);
+    arr.splice(afterIndex + 1, 0, { id: uid(), act: inheritedAct, gapIndex: null, chapterId: inheritedChapter, title: 'New Card', text: '', notes: '', tags: [], values: [], placeholder: GENERIC_PLACEHOLDER, customColor: null, major: false });
+    return { ...s, cards: arr };
+  });
+
+  const addLib = (key) => (item) => setState(s => s[key].includes(item) ? s : { ...s, [key]: [...s[key], item] });
+  const removeLib = (key) => (item) => setState(s => ({ ...s, [key]: s[key].filter(x => x !== item) }));
+
+  const visibleCards = cards.map((c, i) => ({ c, i }))
+    .filter(({ c }) => !showUnassignedOnly || c.act === null)
+    .filter(({ c }) => chapterFilter === 'all' || c.chapterId === chapterFilter);
+
+  return (
+    <div style={{ maxWidth: 820, margin: '0 auto', padding: '12px 16px' }}>
+      <ChipBar label="Characters" items={characters} onAdd={addLib('characters')} onRemove={removeLib('characters')} />
+      <ChipBar label="Themes" items={themes} onAdd={addLib('themes')} onRemove={removeLib('themes')} />
+      <ChipBar label="Story Values" items={values} onAdd={addLib('values')} onRemove={removeLib('values')} />
+      <HelpNote on={help}>Cards run top to bottom in story order. Each card's placeholder prompt (e.g. "What change turns the plot?") is just a nudge — replace it with your own text, or leave it blank.</HelpNote>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '12px 0' }}>
+        <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={showUnassignedOnly} onChange={e => setShowUnassignedOnly(e.target.checked)} />
+          Show only unassigned
+        </label>
+        <button onClick={addCard} style={{ fontSize: 13, border: '1px solid #ccc', borderRadius: 8, padding: '4px 10px', cursor: 'pointer' }}>+ New Card</button>
+      </div>
+
+      {visibleCards.length > 0 && <InsertDivider onInsert={() => insertCardAt(visibleCards[0].i - 1)} />}
+      {visibleCards.map(({ c, i }, j) => (
+        <React.Fragment key={c.id}>
+        <CardFields
+          card={c} updateCard={p => updateCard(c.id, p)} characters={characters} threads={threads}
+          valuesLib={values} onAddThread={addLib('threads')} tagTypes={tagTypes} onAddTagType={addLib('tagTypes')}
+          showNudgeDelete onNudge={dir => nudge(i, dir)} onDelete={() => removeCard(c.id)}
+          nudgeDisabled={{ up: i === 0, down: i === cards.length - 1 }}
+        />
+        <InsertDivider onInsert={() => insertCardAt(i)} />
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+function InsertDivider({ onInsert }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{ position: 'relative', height: hover ? 24 : 10, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'height 0.1s' }}
+    >
+      <div style={{ position: 'absolute', left: 0, right: 0, top: '50%', height: 1, background: hover ? '#ccc' : 'transparent' }} />
+      {hover && (
+        <button
+          onClick={onInsert}
+          title="Insert card here"
+          style={{
+            zIndex: 2, width: 20, height: 20, borderRadius: '50%', border: '1px solid #bbb', background: '#fff',
+            color: '#666', fontSize: 13, lineHeight: '18px', cursor: 'pointer', padding: 0,
+          }}
+        >+</button>
+      )}
+    </div>
+  );
+}
+const btnStyle = { border: '1px solid #ddd', background: '#fff', borderRadius: 6, cursor: 'pointer', fontSize: 12, padding: '2px 6px' };
+const chipStyle = { border: '1px solid #ddd', background: '#fff', color: '#333', borderRadius: 999, cursor: 'pointer', fontSize: 12, padding: '4px 12px' };
+const chipActiveStyle = { background: '#333', color: '#fff', borderColor: '#333' };
+
+/* ============================== FLOWCHART VIEW ============================== */
+
+// One chapter's five-Act-plus-Unassigned column strip. `cards` is always the FULL global
+// array (needed so index-based splicing in setState stays correct) — filtering to this
+// chapter happens internally.
+function FlowchartChapterRow({ chapterId, cards, setState, onOpenPopup }) {
+  const setAct = (id, act) => setState(s => ({ ...s, cards: s.cards.map(c => c.id === id ? { ...c, act } : c) }));
+
+  const insertCard = (afterIndex, act) => setState(s => {
+    const arr = [...s.cards];
+    const newCard = { id: uid(), act, gapIndex: null, chapterId, title: 'New Card', text: '', notes: '', tags: [], values: [], placeholder: GENERIC_PLACEHOLDER, customColor: null, major: false };
+    arr.splice(afterIndex + 1, 0, newCard);
+    return { ...s, cards: arr };
+  });
+
+  const nudgeInColumn = (colCards, localIdx, dir) => {
+    const target = colCards[localIdx + dir];
+    if (!target) return;
+    const trueA = colCards[localIdx].i, trueB = target.i;
+    setState(s => {
+      const arr = [...s.cards];
+      [arr[trueA], arr[trueB]] = [arr[trueB], arr[trueA]];
+      return { ...s, cards: arr };
+    });
+  };
+
+  const columnsOrder = [...ACTS, 0]; // Act I..V, then Unassigned — used to find neighbouring columns
+  const getAdjacentColAct = (colAct, dir) => {
+    const idx = columnsOrder.indexOf(colAct);
+    const j = idx + dir;
+    if (j < 0 || j >= columnsOrder.length) return undefined;
+    return columnsOrder[j];
+  };
+
+  // Moves a card into a neighbouring act column within THIS chapter: 'end' = bottom of the
+  // previous act (top card nudged up), 'start' = top of the next act (bottom card nudged down).
+  const moveCardAcrossAct = (cardId, targetColAct, position) => setState(s => {
+    const arr = [...s.cards];
+    const idx = arr.findIndex(c => c.id === cardId);
+    if (idx === -1) return s;
+    const [card] = arr.splice(idx, 1);
+    const targetAct = targetColAct === 0 ? null : targetColAct;
+    const moved = { ...card, act: targetAct };
+    const actEntries = arr.map((c, i) => ({ c, i })).filter(({ c }) => c.chapterId === chapterId && (targetColAct === 0 ? c.act === null : c.act === targetColAct));
+    let insertAt;
+    if (actEntries.length === 0) insertAt = arr.length;
+    else if (position === 'start') insertAt = actEntries[0].i;
+    else insertAt = actEntries[actEntries.length - 1].i + 1;
+    arr.splice(insertAt, 0, moved);
+    return { ...s, cards: arr };
+  });
+
+  const columns = [...ACTS, 0]; // unassigned bucket placed after Act V
+
+  return (
+    <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+      {columns.map(colAct => {
+        const bg = colAct === 0 ? UNASSIGNED_COLOR : ACT_COLORS[colAct];
+        const border = colAct === 0 ? UNASSIGNED_BORDER : ACT_BORDERS[colAct];
+        const colCards = cards.map((c, i) => ({ c, i })).filter(({ c }) => c.chapterId === chapterId && (colAct === 0 ? c.act === null : c.act === colAct));
+        const chapterCardIdxs = cards.map((c, i) => ({ c, i })).filter(({ c }) => c.chapterId === chapterId);
+        const insertAct = colAct === 0 ? null : colAct;
+        const topInsertAfterIndex = colCards.length > 0 ? colCards[0].i - 1 : (chapterCardIdxs.length > 0 ? chapterCardIdxs[chapterCardIdxs.length - 1].i : cards.length - 1);
+        const prevColAct = getAdjacentColAct(colAct, -1);
+        const nextColAct = getAdjacentColAct(colAct, 1);
+        return (
+          <div key={colAct} style={{ minWidth: 220, flex: 1, background: bg, border: `1px solid ${border}`, borderRadius: 10, padding: 8 }}>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, color: '#555' }}>
+              {colAct === 0 ? 'Unassigned' : ACT_NAMES[colAct]}
+            </div>
+            <FlowInsertDivider onInsert={() => insertCard(topInsertAfterIndex, insertAct)} />
+            {colCards.map(({ c, i }, localIdx) => {
+              const isTop = localIdx === 0;
+              const isBottom = localIdx === colCards.length - 1;
+              const upDisabled = isTop ? prevColAct === undefined : false;
+              const downDisabled = isBottom ? nextColAct === undefined : false;
+              const onUp = () => isTop ? moveCardAcrossAct(c.id, prevColAct, 'end') : nudgeInColumn(colCards, localIdx, -1);
+              const onDown = () => isBottom ? moveCardAcrossAct(c.id, nextColAct, 'start') : nudgeInColumn(colCards, localIdx, 1);
+              return (
+                <React.Fragment key={c.id}>
+                  <div style={{ background: resolveColor(c), border: `1px solid ${resolveBorder(c)}`, borderRadius: 8, padding: 8 }}
+                    onDoubleClick={() => onOpenPopup(c.id)}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <input value={c.title} onChange={e => setState(s => ({ ...s, cards: s.cards.map(cc => cc.id === c.id ? { ...cc, title: e.target.value } : cc) }))}
+                        onClick={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}
+                        style={{ fontSize: 13, fontWeight: 600, flex: 1, border: 'none', background: 'transparent', padding: 0, minWidth: 0 }} />
+                      <div style={{ display: 'flex', gap: 2 }}>
+                        <button onClick={() => onOpenPopup(c.id)} style={btnStyle} title="Open details">✎</button>
+                        <button onClick={onUp} disabled={upDisabled} style={{ ...btnStyle, opacity: upDisabled ? 0.35 : 1 }}
+                          title={isTop ? (prevColAct !== undefined ? `Move to ${prevColAct === 0 ? 'Unassigned' : ACT_NAMES[prevColAct]}` : undefined) : undefined}>↑</button>
+                        <button onClick={onDown} disabled={downDisabled} style={{ ...btnStyle, opacity: downDisabled ? 0.35 : 1 }}
+                          title={isBottom ? (nextColAct !== undefined ? `Move to ${nextColAct === 0 ? 'Unassigned' : ACT_NAMES[nextColAct]}` : undefined) : undefined}>↓</button>
+                      </div>
+                    </div>
+                    <select value={c.act === null ? '' : c.act} onChange={e => setAct(c.id, e.target.value ? parseInt(e.target.value, 10) : null)}
+                      style={{ fontSize: 11, marginTop: 4 }}>
+                      <option value="">Unassigned</option>
+                      {ACTS.map(a => <option key={a} value={a}>{ACT_NAMES[a]}</option>)}
+                    </select>
+                  </div>
+                  <FlowInsertDivider onInsert={() => insertCard(i, insertAct)} />
+                </React.Fragment>
+              );
+            })}
+            {colCards.length === 0 && <div style={{ fontSize: 12, color: '#999', textAlign: 'center' }}>No cards</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function FlowchartView({ state, setState, chapterFilter, expandedChapterIds, setExpandedChapterIds, help }) {
+  const { cards, characters, threads, values, chapters, tagTypes } = state;
+  const scrollRef = useRef(null);
+  const [popupCard, setPopupCard] = useState(null);
+  const [jumpTo, setJumpTo] = useState('');
+
+  useEffect(() => {
+    const handler = (e) => {
+      const tag = document.activeElement && document.activeElement.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (!scrollRef.current) return;
+      if (e.key === 'ArrowRight') scrollRef.current.scrollLeft += 60;
+      if (e.key === 'ArrowLeft') scrollRef.current.scrollLeft -= 60;
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  const updateCard = (id, patch) => setState(s => ({ ...s, cards: s.cards.map(c => c.id === id ? { ...c, ...patch } : c) }));
+  const nudgeCard = (cardId, dir) => setState(s => {
+    const idx = s.cards.findIndex(c => c.id === cardId);
+    if (idx === -1) return s;
+    return { ...s, cards: nudgeWithActAdoption(s.cards, idx, dir) };
+  });
+
+  const addLib = (key) => (item) => setState(s => s[key].includes(item) ? s : { ...s, [key]: [...s[key], item] });
+
+  const visibleChapters = chapterFilter === 'all' ? chapters : chapters.filter(ch => ch.id === chapterFilter);
+  const showCollapsible = chapterFilter === 'all' && chapters.length > 1;
+
+  const isExpanded = (id) => !showCollapsible || expandedChapterIds.includes(id);
+  const toggleExpanded = (id) => setExpandedChapterIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const expandAll = () => setExpandedChapterIds(chapters.map(ch => ch.id));
+  const collapseAll = () => setExpandedChapterIds([]);
+
+  const jumpToChapter = (id) => {
+    if (!id) return;
+    if (!expandedChapterIds.includes(id)) setExpandedChapterIds(prev => [...prev, id]);
+    setTimeout(() => {
+      const el = document.getElementById('flow-chapter-row-' + id);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 0);
+  };
+
+  const cardCountFor = (chapterId) => cards.filter(c => c.chapterId === chapterId).length;
+
+  return (
+    <div style={{ padding: '12px 16px' }}>
+      <HelpNote on={help}>Cards are grouped by chapter and act. Click a chapter header to collapse it, or use "Expand all" / "Collapse all" and the jump menu to navigate a long story.</HelpNote>
+      {showCollapsible && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 3, flex: 1, minWidth: 120 }}>
+            {chapters.map(ch => (
+              <div key={ch.id} onClick={() => jumpToChapter(ch.id)} title={ch.title}
+                style={{ height: 6, borderRadius: 3, flex: 1, cursor: 'pointer', background: isExpanded(ch.id) ? '#5b8def' : '#e0e0e0' }} />
+            ))}
+          </div>
+          <select value={jumpTo} onChange={e => { jumpToChapter(e.target.value); setJumpTo(''); }}
+            style={{ fontSize: 12, border: '1px solid #ddd', borderRadius: 8, padding: '3px 6px' }}>
+            <option value="">Jump to...</option>
+            {chapters.map(ch => <option key={ch.id} value={ch.id}>{ch.title}</option>)}
+          </select>
+          <button onClick={expandAll} style={btnStyle}>Expand all</button>
+          <button onClick={collapseAll} style={btnStyle}>Collapse all</button>
+        </div>
+      )}
+      <div ref={scrollRef} style={{ display: 'flex', flexDirection: 'column', gap: 8, overflowX: 'auto', paddingBottom: 12 }}>
+        {visibleChapters.map(ch => {
+          const open = isExpanded(ch.id);
+          return (
+            <div key={ch.id} id={'flow-chapter-row-' + ch.id} style={showCollapsible ? { border: '1px solid #eee', borderRadius: 10 } : undefined}>
+              <div
+                onClick={showCollapsible ? () => toggleExpanded(ch.id) : undefined}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 14,
+                  padding: showCollapsible ? '8px 12px' : '0 0 6px', cursor: showCollapsible ? 'pointer' : 'default',
+                  background: showCollapsible ? '#fafafa' : 'transparent', borderRadius: showCollapsible ? '10px 10px 0 0' : 0,
+                }}>
+                {showCollapsible && <span style={{ fontSize: 11, color: '#999', width: 10 }}>{open ? '▾' : '▸'}</span>}
+                <span style={{ flex: 1 }}>{ch.title}</span>
+                {showCollapsible && <span style={{ fontSize: 11, color: '#999', fontWeight: 400 }}>{cardCountFor(ch.id)} cards</span>}
+              </div>
+              {open && (
+                <div style={{ padding: showCollapsible ? 12 : 0 }}>
+                  <FlowchartChapterRow chapterId={ch.id} cards={cards} setState={setState} onOpenPopup={setPopupCard} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {popupCard && (
+        <CardEditModal
+          card={cards.find(c => c.id === popupCard)} cards={cards} onClose={() => setPopupCard(null)}
+          updateCard={p => updateCard(popupCard, p)} onNudge={dir => nudgeCard(popupCard, dir)}
+          onDelete={() => setState(s => ({ ...s, cards: s.cards.filter(c => c.id !== popupCard) }))}
+          characters={characters} threads={threads} valuesLib={values} onAddThread={addLib('threads')}
+          tagTypes={tagTypes} onAddTagType={addLib('tagTypes')}
+        />
+      )}
+    </div>
+  );
+}
+
+function FlowInsertDivider({ onInsert }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{ position: 'relative', height: hover ? 22 : 8, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'height 0.1s' }}
+    >
+      <div style={{ position: 'absolute', left: 0, right: 0, top: '50%', height: 1, background: hover ? '#ccc' : 'transparent' }} />
+      {hover && (
+        <button onClick={onInsert} title="Insert card here"
+          style={{ zIndex: 2, width: 18, height: 18, borderRadius: '50%', border: '1px solid #bbb', background: '#fff', color: '#666', fontSize: 12, lineHeight: '16px', cursor: 'pointer', padding: 0 }}>
+          +
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ============================== STORY CIRCLE VIEW ============================== */
+
+function angleForGapCard(gapIndex, posInGap, totalInGap) {
+  const gapStart = -90 + gapIndex * 45; // 12 o'clock start, clockwise
+  const span = 40; // leave small margin within 45deg gap
+  if (totalInGap <= 1) return gapStart + 22.5;
+  return gapStart + 2.5 + (span * posInGap) / (totalInGap - 1);
+}
+
+function polar(cx, cy, r, angleDeg) {
+  const a = (angleDeg * Math.PI) / 180;
+  return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
+}
+
+// Automatically distributes cards around the 8 circle gaps, preserving Scene order.
+function autoDistributeGaps(cards) {
+  const n = cards.length;
+  const gapIndexById = {};
+  if (n === 0) return gapIndexById;
+  const base = Math.floor(n / 8), extra = n % 8;
+  let idx = 0;
+  for (let g = 0; g < 8; g++) {
+    const count = base + (g < extra ? 1 : 0);
+    for (let k = 0; k < count; k++) {
+      gapIndexById[cards[idx].id] = g;
+      idx++;
+    }
+  }
+  return gapIndexById;
+}
+
+function CircleView({ state, setState, pinnedIds, setPinnedIds, chapterFilter, onBackToRing, help }) {
+  const { cards: allCards, characters, threads, values, chapters, tagTypes, threadNotes, threadColors } = state;
+  const cards = useMemo(() => filterByChapter(allCards, chapterFilter), [allCards, chapterFilter]);
+  const stages = (state.circleStages && state.circleStages.length === 8) ? state.circleStages : CIRCLE_STAGES;
+  const stagesHidden = !!state.circleStagesHidden;
+  const [stagesOpen, setStagesOpen] = useState(false);
+  const [stagesDraft, setStagesDraft] = useState(stages);
+  const [stagesHiddenDraft, setStagesHiddenDraft] = useState(stagesHidden);
+  const openStagesEditor = () => { setStagesDraft(stages); setStagesHiddenDraft(stagesHidden); setStagesOpen(true); };
+  const saveStages = () => {
+    setState(s => ({ ...s, circleStages: stagesDraft.map(x => x.trim() || 'Untitled'), circleStagesHidden: stagesHiddenDraft }));
+    setStagesOpen(false);
+  };
+  const [zoom, setZoom] = useState('full'); // full | compact
+  const [hoveredId, setHoveredId] = useState(null);
+  const [popupCard, setPopupCard] = useState(null);
+  const [chipStack, setChipStack] = useState(null); // array of card ids, or null when closed
+  const [mode, setMode] = useState('story'); // story | threads
+  const [lockedThreads, setLockedThreads] = useState([]); // persisted locked thread names, no cap
+  const [hoverThread, setHoverThread] = useState(null);
+  const [threadPopup, setThreadPopup] = useState(null);
+  const [ringRotation, setRingRotation] = useState(0); // degrees; cards/labels stay upright, only position moves
+
+  const togglePin = (id) => setPinnedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+  const size = 1100;
+  const cx = size / 2, cy = size / 2;
+  const anchorR = 178;
+  const cardR = 400;
+  const cardW = zoom === 'compact' ? 150 : 200;
+
+  const gapIndexById = useMemo(() => autoDistributeGaps(cards), [cards]);
+  const gaps = Array.from({ length: 8 }, (_, g) => cards.map((c, i) => ({ c, i })).filter(({ c }) => gapIndexById[c.id] === g));
+
+  const updateCard = (id, patch) => setState(s => ({ ...s, cards: s.cards.map(c => c.id === id ? { ...c, ...patch } : c) }));
+  const removeCard = (id) => { setState(s => ({ ...s, cards: s.cards.filter(c => c.id !== id) })); setChipStack(prev => prev ? prev.filter(x => x !== id) : prev); };
+  const addLib = (key) => (item) => setState(s => s[key].includes(item) ? s : { ...s, [key]: [...s[key], item] });
+  const nudgeCard = (cardId, dir) => setState(s => {
+    const idx = s.cards.findIndex(c => c.id === cardId);
+    if (idx === -1) return s;
+    return { ...s, cards: nudgeWithActAdoption(s.cards, idx, dir) };
+  });
+  const insertIntoStack = (pos) => {
+    if (!chipStack) return;
+    const newId = uid();
+    setState(s => {
+      const refId = pos < chipStack.length ? chipStack[pos] : chipStack[chipStack.length - 1];
+      const idx = s.cards.findIndex(c => c.id === refId);
+      if (idx === -1) return s;
+      const ref = s.cards[idx];
+      const insertAt = pos < chipStack.length ? idx : idx + 1;
+      const arr = [...s.cards];
+      arr.splice(insertAt, 0, { id: newId, act: ref.act, gapIndex: null, chapterId: ref.chapterId, title: 'New Card', text: '', notes: '', tags: [], values: [], placeholder: GENERIC_PLACEHOLDER, customColor: null, major: false });
+      return { ...s, cards: arr };
+    });
+    let newStack = [...chipStack];
+    newStack.splice(pos, 0, newId);
+    if (newStack.length > 3) {
+      if (pos === 0) newStack.pop(); else newStack.shift();
+    }
+    setChipStack(newStack);
+  };
+
+
+  // Angle for every card, resolved once from gap position — stable regardless of
+  // pin/hover-driven paint-order changes below, and reused for the thread hub lines.
+  const angleById = {};
+  gaps.forEach((gapCards, g) => { gapCards.forEach(({ c }, pos) => { angleById[c.id] = angleForGapCard(g, pos, gapCards.length) + ringRotation; }); });
+  const cardPos = {};
+  cards.forEach(c => { cardPos[c.id] = polar(cx, cy, cardR, angleById[c.id]); });
+
+  // Thread setups/payoffs derived from card tags, plus a stable colour and hub point per thread.
+  const threadData = useMemo(() => {
+    const map = {};
+    threads.forEach(name => { map[name] = { setups: [], payoffs: [], steps: [] }; });
+    cards.forEach(c => {
+      (c.tags || []).forEach(t => {
+        if (t.type === 'Thread') {
+          if (!map[t.note]) map[t.note] = { setups: [], payoffs: [], steps: [] };
+          if (t.role === 'setup') map[t.note].setups.push(c.id);
+          else if (t.role === 'step') map[t.note].steps.push({ cardId: c.id });
+          else map[t.note].payoffs.push(c.id);
+        }
+      });
+    });
+    const order = chronoOrderMap(allCards, chapters);
+    Object.values(map).forEach(d => { d.steps = numberThreadSteps(d.steps, order); });
+    return map;
+  }, [allCards, cards, threads, chapters]);
+  const threadNames = threads;
+  const threadColor = (name) => (threadColors && threadColors[name]) || THREAD_COLORS[hashColorIndex(name) % THREAD_COLORS.length] || '#888780';
+  const threadHub = (name) => {
+    const i = threadNames.indexOf(name);
+    const n = threadNames.length;
+    const off = i - (n - 1) / 2;
+    return { x: cx + off * 30, y: cy + off * 15 };
+  };
+  const cardThreadsOf = (cardId) => {
+    const names = [];
+    for (const name of threadNames) {
+      const d = threadData[name];
+      if (d && (d.setups.includes(cardId) || d.payoffs.includes(cardId) || d.steps.some(s => s.cardId === cardId))) names.push(name);
+    }
+    return names;
+  };
+  const toggleLockedThread = (name) => setLockedThreads(prev =>
+    prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
+  const ensureLockedThread = (name) => setLockedThreads(prev =>
+    prev.includes(name) ? prev : [...prev, name]);
+  const effectiveThreads = hoverThread && !lockedThreads.includes(hoverThread) ? [...lockedThreads, hoverThread] : lockedThreads;
+
+  // Thread editorial helpers — operate on the global card array (threads can span chapters).
+  const addThreadRole = (threadName, cardId, role, stepNum) => setState(s => ({
+    ...s, cards: s.cards.map(c => c.id === cardId
+      ? { ...c, tags: [...c.tags, { id: uid(), type: 'Thread', role, note: threadName }] }
+      : c),
+  }));
+  const createAndAddRole = (threadName, title, role, stepNum) => {
+    const defaultChapterId = (chapterFilter && chapterFilter !== 'all') ? chapterFilter
+      : ((chapters[chapters.length - 1] && chapters[chapters.length - 1].id) || null);
+    setState(s => ({
+      ...s, cards: [...s.cards, {
+        id: uid(), act: null, gapIndex: null, chapterId: defaultChapterId, title, text: '', notes: '',
+        tags: [{ id: uid(), type: 'Thread', role, note: threadName }],
+        values: [], placeholder: GENERIC_PLACEHOLDER, customColor: null, major: false,
+      }],
+    }));
+  };
+  const removeThreadTag = (cardId, tagId) => setState(s => ({
+    ...s, cards: s.cards.map(c => c.id === cardId ? { ...c, tags: c.tags.filter(t => t.id !== tagId) } : c),
+  }));
+  const renameThread = (oldName, newName) => setState(s => {
+    if (!newName.trim() || newName === oldName) return s;
+    const notes = { ...s.threadNotes };
+    if (oldName in notes) { notes[newName] = notes[oldName]; delete notes[oldName]; }
+    const colors = { ...(s.threadColors || {}) };
+    if (oldName in colors) { colors[newName] = colors[oldName]; delete colors[oldName]; }
+    const lanes = { ...(s.threadLanes || {}) };
+    if (oldName in lanes) { lanes[newName] = lanes[oldName]; delete lanes[oldName]; }
+    return {
+      ...s,
+      threads: s.threads.map(t => t === oldName ? newName : t),
+      cards: s.cards.map(c => ({ ...c, tags: c.tags.map(t => (t.type === 'Thread' && t.note === oldName) ? { ...t, note: newName } : t) })),
+      threadNotes: notes,
+      threadColors: colors,
+      threadLanes: lanes,
+    };
+  });
+  const setThreadColorOverride = (name, hex) => setState(s => ({ ...s, threadColors: { ...(s.threadColors || {}), [name]: hex } }));
+  const deleteThread = (name) => {
+    setState(s => {
+      const notes = { ...s.threadNotes };
+      delete notes[name];
+      const colors = { ...(s.threadColors || {}) };
+      delete colors[name];
+      const lanes = { ...(s.threadLanes || {}) };
+      delete lanes[name];
+      return {
+        ...s,
+        threads: s.threads.filter(t => t !== name),
+        cards: s.cards.map(c => ({ ...c, tags: c.tags.filter(t => !(t.type === 'Thread' && t.note === name)) })),
+        threadNotes: notes,
+        threadColors: colors,
+        threadLanes: lanes,
+      };
+    });
+    setThreadPopup(null);
+    setLockedThreads(prev => prev.filter(n => n !== name));
+  };
+  const updateThreadNotes = (name, text) => setState(s => ({ ...s, threadNotes: { ...s.threadNotes, [name]: text } }));
+
+  // Flat, angle-resolved render order (matches Scene order). SVG paints elements in
+  // document order and does not respect CSS z-index between sibling <foreignObject>s,
+  // so "bring to front" is done by moving a card to the END of this render list rather
+  // than via z-index — this also fixes the first card being unable to front the last.
+  let renderList = gaps.flatMap((gapCards, g) => gapCards.map(({ c, i }, pos) => ({
+    c, i, angle: angleForGapCard(g, pos, gapCards.length) + ringRotation,
+  })));
+  if (pinnedIds.length > 0) {
+    pinnedIds.forEach(id => {
+      const idx = renderList.findIndex(o => o.c.id === id);
+      if (idx !== -1) renderList.push(renderList.splice(idx, 1)[0]);
+    });
+  }
+  if (hoveredId && !pinnedIds.includes(hoveredId)) {
+    const idx = renderList.findIndex(o => o.c.id === hoveredId);
+    if (idx !== -1) renderList.push(renderList.splice(idx, 1)[0]);
+  }
+
+  return (
+    <div style={{ padding: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 2, background: '#f4f4f4', borderRadius: 8, padding: 2 }}>
+          <button onClick={() => setMode('story')} style={{ ...btnStyle, border: 'none', background: mode === 'story' ? '#fff' : 'transparent', fontWeight: mode === 'story' ? 600 : 400 }}>Story</button>
+          <button onClick={() => setMode('threads')} style={{ ...btnStyle, border: 'none', background: mode === 'threads' ? '#fff' : 'transparent', fontWeight: mode === 'threads' ? 600 : 400 }}>Threads</button>
+        </div>
+        {/* Compact zoom toggle removed (wasn't doing anything distinct from full) — zoom stays 'full'.
+            ZoomControls + the 'compact' branches (cardW, etc.) are left in place below in case
+            a real compact layout gets built later. */}
+        <button onClick={() => setPinnedIds([])} style={btnStyle} title="Unpin everything and restore cascading stack order">Reset stacking</button>
+        {mode === 'story' && (
+          <button onClick={openStagesEditor} style={btnStyle} title="Rename or hide the eight stage labels around the ring">✎ Stage labels</button>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title="Spin the ring — cards and labels stay upright, only their position moves">
+          <span style={{ fontSize: 12, color: '#888' }}>Rotate</span>
+          <input type="range" min={0} max={359} step={1} value={ringRotation}
+            onChange={e => setRingRotation(Number(e.target.value))} style={{ width: 100 }} />
+          {ringRotation !== 0 && (
+            <button onClick={() => setRingRotation(0)} style={{ ...btnStyle, padding: '2px 8px' }} title="Reset rotation">Reset</button>
+          )}
+        </div>
+        {onBackToRing && (
+          <button onClick={onBackToRing} style={{ border: 'none', background: 'none', color: '#999', textDecoration: 'underline', cursor: 'pointer', fontSize: 12, marginLeft: 'auto' }}>
+            ← Back to Ring view
+          </button>
+        )}
+      </div>
+      <HelpNote on={help}>This is the simple version of the ring layout — cards sit at a fixed distance from the center and can overlap once a stage gets crowded. Switch to Ring for a layout that never overlaps.</HelpNote>
+
+      {stagesOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+          onClick={() => setStagesOpen(false)}>
+          <div style={{ background: '#fff', borderRadius: 10, width: 340, padding: 20, boxShadow: '0 8px 30px rgba(0,0,0,0.25)' }}
+            onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 14px', fontSize: 15 }}>Stage labels</h3>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, marginBottom: 12 }}>
+              <input type="checkbox" checked={stagesHiddenDraft} onChange={e => setStagesHiddenDraft(e.target.checked)} />
+              Hide stage labels on the ring
+            </label>
+            {!stagesHiddenDraft && stagesDraft.map((label, i) => (
+              <input key={i} value={label}
+                onChange={e => setStagesDraft(prev => prev.map((x, j) => j === i ? e.target.value : x))}
+                style={{ fontSize: 13, border: '1px solid #ddd', borderRadius: 8, padding: '5px 9px', width: '100%', boxSizing: 'border-box', marginBottom: 6 }} />
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
+              <button onClick={() => setStagesOpen(false)} style={btnStyle}>Cancel</button>
+              <button onClick={saveStages} style={{ ...btnStyle, border: 'none', background: '#222', color: '#fff' }}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mode === 'threads' && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '10px 0' }}>
+          <button onClick={() => setLockedThreads([])}
+            style={{ ...chipStyle, ...(lockedThreads.length === 0 ? chipActiveStyle : {}) }}>All threads</button>
+          {threadNames.map(name => (
+            <button key={name} onClick={() => { ensureLockedThread(name); setThreadPopup(name); }}
+              style={{ ...chipStyle, display: 'flex', alignItems: 'center', gap: 5, ...(lockedThreads.includes(name) ? chipActiveStyle : {}) }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: threadColor(name), display: 'inline-block' }} />
+              {name}
+            </button>
+          ))}
+          {threadNames.length === 0 && <span style={{ fontSize: 12, color: '#999' }}>No threads yet — tag a card as a Thread setup or payoff first.</span>}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
+        <div style={{ flex: 1, minWidth: 0, overflow: 'auto', border: '1px solid #eee', borderRadius: 10 }}>
+          <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}
+            onClick={() => { if (mode === 'threads') setLockedThreads([]); }}>
+          {mode === 'story' && (
+            <>
+              <circle cx={cx} cy={cy} r={anchorR} fill="none" stroke="#ddd" />
+              {!stagesHidden && stages.map((stage, i) => {
+                const angle = -90 + i * 45 + ringRotation;
+                const p = polar(cx, cy, anchorR, angle);
+                const lozW = stage.length * 9 + 26;
+                const lozH = 28;
+                return (
+                  <foreignObject key={i} x={p.x - lozW / 2} y={p.y - lozH / 2} width={lozW} height={lozH} style={{ overflow: 'visible' }}>
+                    <div style={{
+                      width: '100%', height: '100%', background: '#e8e6e2', border: '1px solid #d2cfc9',
+                      borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 13, fontWeight: 600, color: '#555',
+                    }}>{stage}</div>
+                  </foreignObject>
+                );
+              })}
+            </>
+          )}
+          {mode === 'threads' && threadNames.map(name => {
+            const color = threadColor(name);
+            const hub = threadHub(name);
+            const isActive = effectiveThreads.length === 0 || effectiveThreads.includes(name);
+            const lineOp = isActive ? 0.85 : 0.08;
+            const hubOp = isActive ? 1 : 0.15;
+            const enter = () => setHoverThread(name);
+            const leave = () => setHoverThread(null);
+            const lock = (e) => { e.stopPropagation(); toggleLockedThread(name); };
+            const d = threadData[name] || { setups: [], payoffs: [] };
+            return (
+              <React.Fragment key={name}>
+                {d.setups.map(cid => cardPos[cid] && (
+                  <React.Fragment key={'s' + cid}>
+                    <path d={`M${cardPos[cid].x} ${cardPos[cid].y} L${hub.x} ${hub.y}`} stroke={color} strokeWidth={10} opacity={0} style={{ cursor: 'pointer' }}
+                      onMouseEnter={enter} onMouseLeave={leave} onClick={lock} />
+                    <path d={`M${cardPos[cid].x} ${cardPos[cid].y} L${hub.x} ${hub.y}`} stroke={color} strokeWidth={2} opacity={lineOp} fill="none" />
+                  </React.Fragment>
+                ))}
+                {d.payoffs.map(cid => cardPos[cid] && (
+                  <React.Fragment key={'p' + cid}>
+                    <path d={`M${hub.x} ${hub.y} L${cardPos[cid].x} ${cardPos[cid].y}`} stroke={color} strokeWidth={10} opacity={0} style={{ cursor: 'pointer' }}
+                      onMouseEnter={enter} onMouseLeave={leave} onClick={lock} />
+                    <path d={`M${hub.x} ${hub.y} L${cardPos[cid].x} ${cardPos[cid].y}`} stroke={color} strokeWidth={2} opacity={lineOp} fill="none" />
+                  </React.Fragment>
+                ))}
+                <circle cx={hub.x} cy={hub.y} r={16} fill="transparent" style={{ cursor: 'pointer' }}
+                  onMouseEnter={enter} onMouseLeave={leave}
+                  onClick={(e) => { e.stopPropagation(); if (lockedThreads.includes(name)) setHoverThread(null); toggleLockedThread(name); }}
+                  onDoubleClick={(e) => { e.stopPropagation(); ensureLockedThread(name); setThreadPopup(name); }} />
+                <circle cx={hub.x} cy={hub.y} r={9} fill={color} opacity={hubOp} style={{ pointerEvents: 'none' }} />
+              </React.Fragment>
+            );
+          })}
+          {renderList.map(({ c, angle }) => {
+            const p = polar(cx, cy, cardR, angle);
+            const isFront = pinnedIds.includes(c.id) || hoveredId === c.id;
+            const cardThreads = mode === 'threads' ? cardThreadsOf(c.id) : [];
+            const dimmed = mode === 'threads' && effectiveThreads.length > 0 && !cardThreads.some(t => effectiveThreads.includes(t));
+            return (
+              <foreignObject key={c.id} x={p.x - cardW / 2} y={p.y - 30} width={cardW} height={60}
+                style={{ overflow: 'visible' }}>
+                <div
+                  onMouseEnter={() => { setHoveredId(c.id); if (mode === 'threads' && cardThreads.length) setHoverThread(cardThreads[0]); }}
+                  onMouseLeave={() => { setHoveredId(null); if (mode === 'threads') setHoverThread(null); }}
+                  onClick={(e) => { e.stopPropagation(); if (mode === 'threads' && cardThreads.length) { const ct = cardThreads[0]; if (lockedThreads.includes(ct)) setHoverThread(null); toggleLockedThread(ct); } else togglePin(c.id); }}
+                  onDoubleClick={(e) => { e.stopPropagation(); setPopupCard(c.id); }}
+                  style={{
+                    background: resolveColor(c), border: `1px solid ${resolveBorder(c)}`, borderRadius: 8,
+                    padding: '6px 8px', fontSize: 12, cursor: 'pointer', position: 'relative',
+                    transform: isFront ? 'scale(1.15)' : 'scale(1)',
+                    boxShadow: isFront ? '0 4px 14px rgba(0,0,0,0.25)' : 'none',
+                    opacity: dimmed ? 0.25 : 1,
+                  }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                    {zoom === 'full' && (
+                      <button onClick={(e) => { e.stopPropagation(); nudgeCard(c.id, 1); }}
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, padding: '0 2px', flexShrink: 0 }} title="Move clockwise">↻</button>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flex: 1, minWidth: 0 }}>
+                      <span>{c.major ? '★ ' : ''}{c.title}</span>
+                      <button onClick={(e) => { e.stopPropagation(); zoom === 'full' ? setChipStack([c.id]) : setPopupCard(c.id); }}
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, padding: '0 2px', flexShrink: 0 }} title={zoom === 'full' ? 'Quick edit' : 'Open details'}>✎</button>
+                    </div>
+                    {zoom === 'full' && (
+                      <button onClick={(e) => { e.stopPropagation(); nudgeCard(c.id, -1); }}
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, padding: '0 2px', flexShrink: 0 }} title="Move anticlockwise">↺</button>
+                    )}
+                  </div>
+                </div>
+              </foreignObject>
+            );
+          })}
+        </svg>
+        </div>
+
+        {mode === 'threads' && (
+          <ThreadsPanel threadNames={threadNames} threadData={threadData} cards={cards} threadColor={threadColor}
+            lockedThreads={lockedThreads} hoverThread={hoverThread} onToggle={toggleLockedThread}
+            onOpenPopup={name => { ensureLockedThread(name); setThreadPopup(name); }} />
+        )}
+      </div>
+
+      {mode === 'threads' && (
+        <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>Hover a line, hub, or card to preview its thread. Click to lock the dimming. Click a hub to edit that thread.</div>
+      )}
+
+      <RemoteControl cards={cards} updateCard={updateCard} setState={setState} chapterFilter={chapterFilter} chapters={chapters} />
+
+      {popupCard && (
+        <CardEditModal
+          card={cards.find(c => c.id === popupCard)} cards={cards} onClose={() => setPopupCard(null)}
+          updateCard={p => updateCard(popupCard, p)} onNudge={dir => nudgeCard(popupCard, dir)}
+          onDelete={() => removeCard(popupCard)}
+          characters={characters} threads={threads} valuesLib={values} onAddThread={addLib('threads')}
+          tagTypes={tagTypes} onAddTagType={addLib('tagTypes')}
+        />
+      )}
+
+      {chipStack && (
+        <ChipStack
+          ids={chipStack} cards={cards} gapIndexById={gapIndexById} stages={stages} stagesHidden={stagesHidden}
+          updateCard={updateCard} onInsert={insertIntoStack} onDelete={removeCard} onNudge={nudgeCard}
+          onOpenFull={id => { setChipStack(null); setPopupCard(id); }}
+          onClose={() => setChipStack(null)}
+        />
+      )}
+
+      {threadPopup && (
+        <ThreadEditPopup
+          name={threadPopup} data={threadData[threadPopup] || { setups: [], payoffs: [], steps: [] }}
+          cards={cards} color={threadColor(threadPopup)}
+          colorOverride={(threadColors && threadColors[threadPopup]) || null}
+          onColorChange={hex => setThreadColorOverride(threadPopup, hex)}
+          notes={(threadNotes && threadNotes[threadPopup]) || ''}
+          onClose={() => setThreadPopup(null)}
+          onRename={newName => { renameThread(threadPopup, newName); setThreadPopup(newName); setLockedThreads(prev => prev.map(n => n === threadPopup ? newName : n)); }}
+          onAddRole={(cardId, role, stepNum) => addThreadRole(threadPopup, cardId, role, stepNum)}
+          onCreateAndAddRole={(title, role, stepNum) => createAndAddRole(threadPopup, title, role, stepNum)}
+          onRemoveTag={(cardId, tagId) => removeThreadTag(cardId, tagId)}
+          onDelete={() => deleteThread(threadPopup)}
+          onNotesChange={text => updateThreadNotes(threadPopup, text)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ============================== STORY RING VIEW ============================== */
+
+// Wedges tile a gap's 45° slice exactly (42° usable, 1.5° margin each side), so unlike
+// Circle's fixed-width chips on a fixed radius, cards physically cannot overlap.
+function wedgeSpanForGapCard(gapIndex, posInGap, totalInGap, ringRotation) {
+  const gapStart = -90 + gapIndex * 45 + ringRotation;
+  const usable = 42, margin = 1.5;
+  const per = usable / totalInGap;
+  const a0 = gapStart + margin + posInGap * per;
+  return { a0, a1: a0 + per };
+}
+
+function sectorPath(cx, cy, ri, ro, aStart, aEnd) {
+  const p1 = polar(cx, cy, ro, aStart), p2 = polar(cx, cy, ro, aEnd);
+  const p3 = polar(cx, cy, ri, aEnd), p4 = polar(cx, cy, ri, aStart);
+  return `M${p1.x},${p1.y} A${ro},${ro} 0 0 1 ${p2.x},${p2.y} L${p3.x},${p3.y} A${ri},${ri} 0 0 0 ${p4.x},${p4.y} Z`;
+}
+
+function ringLabelRotation(angleDeg) {
+  let a = ((angleDeg % 360) + 540) % 360 - 180;
+  if (a > 90) a -= 180;
+  if (a < -90) a += 180;
+  return a;
+}
+
+// Text runs radially (rotated to the wedge's spoke), so wrap length is the radial span
+// and stacked lines consume tangential room (the wedge's chord width at mid-radius).
+function fitRingLabel(title, radialLen, tangLen) {
+  for (const fs of [12, 11, 10, 9, 8]) {
+    const cw = fs * 0.56, lh = fs * 1.25;
+    const maxChars = Math.floor(radialLen / cw);
+    let lines = 1, cur = 0, ok = true;
+    (title || '').split(/\s+/).filter(Boolean).forEach(word => {
+      if (word.length > maxChars) { ok = false; return; }
+      if (cur === 0) cur = word.length;
+      else if (cur + 1 + word.length <= maxChars) cur += 1 + word.length;
+      else { lines++; cur = word.length; }
+    });
+    if (ok && lines * lh <= tangLen) return { fs, lines, lh };
+  }
+  return null;
+}
+
+function wrapTrackTitle(title, maxChars) {
+  const words = (title || 'Untitled').split(/\s+/).filter(Boolean);
+  const lines = [''];
+  words.forEach(w => {
+    const cur = lines[lines.length - 1];
+    if (!cur) lines[lines.length - 1] = w;
+    else if (cur.length + 1 + w.length <= maxChars) lines[lines.length - 1] = cur + ' ' + w;
+    else lines.push(w);
+  });
+  const clip = (s) => s.length > maxChars ? s.slice(0, Math.max(1, maxChars - 1)) + '\u2026' : s;
+  if (lines.length > 2) return [clip(lines[0]), clip(lines.slice(1).join(' '))];
+  return lines.map(clip);
+}
+
+function RingView({ state, setState, chapterFilter, onOpenClassic, help }) {
+  const { cards: allCards, characters, threads, values, chapters, tagTypes, threadNotes, threadColors } = state;
+  const cards = useMemo(() => filterByChapter(allCards, chapterFilter), [allCards, chapterFilter]);
+  const stages = (state.circleStages && state.circleStages.length === 8) ? state.circleStages : CIRCLE_STAGES;
+  const stagesHidden = !!state.circleStagesHidden;
+  const [stagesOpen, setStagesOpen] = useState(false);
+  const [stagesDraft, setStagesDraft] = useState(stages);
+  const [stagesHiddenDraft, setStagesHiddenDraft] = useState(stagesHidden);
+  const openStagesEditor = () => { setStagesDraft(stages); setStagesHiddenDraft(stagesHidden); setStagesOpen(true); };
+  const saveStages = () => {
+    setState(s => ({ ...s, circleStages: stagesDraft.map(x => x.trim() || 'Untitled'), circleStagesHidden: stagesHiddenDraft }));
+    setStagesOpen(false);
+  };
+  const [hoveredId, setHoveredId] = useState(null);
+  const [popupCard, setPopupCard] = useState(null);
+  const [mode, setMode] = useState('story'); // story | threads
+  const [lockedThreads, setLockedThreads] = useState([]); // persisted locked thread names, no cap
+  const [hoverThread, setHoverThread] = useState(null);
+  const [threadPopup, setThreadPopup] = useState(null);
+  const [ringRotation, setRingRotation] = useState(0);
+  const [debug, setDebug] = useState(false);
+  const svgRef = useRef(null);
+  const dragRef = useRef(null);
+  const justDragged = useRef(false);
+  const [drag, setDrag] = useState(null); // { id, from, x, y, r, a } while a wedge is being dragged
+  const [trackAngles, setTrackAngles] = useState({}); // view-only parking angles for unplaced scenes
+
+  const size = 1100;
+  const cx = size / 2, cy = size / 2;
+  const ri = 190, ro = 460;
+  const tri = ro + 14, tro = ro + 68, trc = (tri + tro) / 2; // outer track for unplaced scenes (fixed, never rotates)
+
+  const ringCards = useMemo(() => cards.filter(c => c.act), [cards]);
+  const trackCards = useMemo(() => cards.filter(c => !c.act), [cards]);
+  const gapIndexById = useMemo(() => autoDistributeGaps(ringCards), [ringCards]);
+  const gaps = Array.from({ length: 8 }, (_, g) => ringCards.map((c, i) => ({ c, i })).filter(({ c }) => gapIndexById[c.id] === g));
+
+  const updateCard = (id, patch) => setState(s => ({ ...s, cards: s.cards.map(c => c.id === id ? { ...c, ...patch } : c) }));
+  const removeCard = (id) => setState(s => ({ ...s, cards: s.cards.filter(c => c.id !== id) }));
+  const addLib = (key) => (item) => setState(s => s[key].includes(item) ? s : { ...s, [key]: [...s[key], item] });
+  const nudgeCard = (cardId, dir) => setState(s => {
+    const idx = s.cards.findIndex(c => c.id === cardId);
+    if (idx === -1) return s;
+    return { ...s, cards: nudgeWithActAdoption(s.cards, idx, dir) };
+  });
+
+  // Wedge span for every card, resolved once from gap position.
+  const wedgeById = {};
+  gaps.forEach((gapCards, g) => { gapCards.forEach(({ c }, pos) => { wedgeById[c.id] = { ...wedgeSpanForGapCard(g, pos, gapCards.length, ringRotation), g, i: pos, n: gapCards.length }; }); });
+  // Thread anchor: wedge's inner-edge midpoint, so connector lines live in the ring's empty
+  // center hole and never cross the wedge band (unlike Circle's hub lines to chip centers).
+  const anchorPos = {};
+  cards.forEach(c => { const w = wedgeById[c.id]; if (w) anchorPos[c.id] = polar(cx, cy, ri, (w.a0 + w.a1) / 2); });
+
+  // ---- Outer track (unplaced scenes) ----
+  const perSlot = Math.min(28, 340 / Math.max(1, trackCards.length));
+  const trackMid = (c, idx) => trackAngles[c.id] !== undefined ? trackAngles[c.id] : -90 + perSlot * (idx + 0.5);
+  const normAngle = (a) => (a < -90 ? a + 360 : a);
+  const circDist = (a, b) => Math.abs((((a - b) % 360) + 540) % 360 - 180);
+  // Insertion boundary in the ring nearest an angle: k = "before ring card k"; k = m means after the last.
+  const ringWedges = ringCards.map(c => wedgeById[c.id]).filter(Boolean);
+  const insertAt = (angle) => {
+    const m = ringWedges.length;
+    if (m === 0) return { k: 0, ang: -90 + ringRotation };
+    let best = { k: 0, ang: ringWedges[0].a0 }, bd = Infinity;
+    for (let k = 0; k <= m; k++) {
+      const ang = k < m ? ringWedges[k].a0 : ringWedges[m - 1].a1;
+      const dd = circDist(angle, ang);
+      if (dd < bd) { bd = dd; best = { k, ang }; }
+    }
+    return best;
+  };
+  const placeCard = (id, k) => setState(s => {
+    const card = s.cards.find(c => c.id === id);
+    if (!card) return s;
+    const rest = s.cards.filter(c => c.id !== id);
+    const ids = ringCards.filter(c => c.id !== id).map(c => c.id);
+    const prev = k > 0 ? ids[k - 1] : null, next = k < ids.length ? ids[k] : null;
+    let at = rest.length;
+    if (next) at = rest.findIndex(c => c.id === next);
+    else if (prev) at = rest.findIndex(c => c.id === prev) + 1;
+    const ref = rest.find(c => c.id === (prev || next));
+    const arr = [...rest];
+    arr.splice(at, 0, { ...card, act: ref ? ref.act : 1 });
+    return { ...s, cards: arr };
+  });
+  const startDrag = (e, c, from) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    dragRef.current = { id: c.id, from, sx: e.clientX, sy: e.clientY, moved: false };
+  };
+  const finishDrag = (d, p) => {
+    const inTrack = p.r >= ro + 6;
+    if (inTrack) {
+      setTrackAngles(t => ({ ...t, [d.id]: normAngle(p.a) }));
+      if (d.from === 'ring') updateCard(d.id, { act: null });
+      return;
+    }
+    if (d.from === 'track' && p.r >= ri - 10) placeCard(d.id, insertAt(p.a).k);
+  };
+  useEffect(() => {
+    const info = (e) => {
+      const r = svgRef.current.getBoundingClientRect();
+      const k = size / r.width;
+      const x = (e.clientX - r.left) * k, y = (e.clientY - r.top) * k;
+      return { x, y, r: Math.hypot(x - cx, y - cy), a: Math.atan2(y - cy, x - cx) * 180 / Math.PI };
+    };
+    const move = (e) => {
+      const d = dragRef.current;
+      if (!d || !svgRef.current) return;
+      if (!d.moved && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 6) return;
+      d.moved = true;
+      setHoveredId(null);
+      setDrag({ id: d.id, from: d.from, ...info(e) });
+    };
+    const up = (e) => {
+      const d = dragRef.current;
+      dragRef.current = null;
+      if (!d || !d.moved || !svgRef.current) return;
+      justDragged.current = true;
+      setTimeout(() => { justDragged.current = false; }, 60);
+      setDrag(null);
+      finishDrag(d, info(e));
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+  });
+
+  const threadData = useMemo(() => {
+    const map = {};
+    threads.forEach(name => { map[name] = { setups: [], payoffs: [], steps: [] }; });
+    cards.forEach(c => {
+      (c.tags || []).forEach(t => {
+        if (t.type === 'Thread') {
+          if (!map[t.note]) map[t.note] = { setups: [], payoffs: [], steps: [] };
+          if (t.role === 'setup') map[t.note].setups.push(c.id);
+          else if (t.role === 'step') map[t.note].steps.push({ cardId: c.id });
+          else map[t.note].payoffs.push(c.id);
+        }
+      });
+    });
+    const order = chronoOrderMap(allCards, chapters);
+    Object.values(map).forEach(d => { d.steps = numberThreadSteps(d.steps, order); });
+    return map;
+  }, [allCards, cards, threads, chapters]);
+  const threadNames = threads;
+  const threadColor = (name) => (threadColors && threadColors[name]) || THREAD_COLORS[hashColorIndex(name) % THREAD_COLORS.length] || '#888780';
+  const threadHub = (name) => {
+    const i = threadNames.indexOf(name);
+    const n = threadNames.length;
+    const off = i - (n - 1) / 2;
+    return { x: cx + off * 30, y: cy + off * 15 };
+  };
+  const cardThreadsOf = (cardId) => {
+    const names = [];
+    for (const name of threadNames) {
+      const d = threadData[name];
+      if (d && (d.setups.includes(cardId) || d.payoffs.includes(cardId) || d.steps.some(s => s.cardId === cardId))) names.push(name);
+    }
+    return names;
+  };
+  const toggleLockedThread = (name) => setLockedThreads(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
+  const ensureLockedThread = (name) => setLockedThreads(prev => prev.includes(name) ? prev : [...prev, name]);
+  const effectiveThreads = hoverThread && !lockedThreads.includes(hoverThread) ? [...lockedThreads, hoverThread] : lockedThreads;
+
+  const addThreadRole = (threadName, cardId, role, stepNum) => setState(s => ({
+    ...s, cards: s.cards.map(c => c.id === cardId
+      ? { ...c, tags: [...c.tags, { id: uid(), type: 'Thread', role, note: threadName }] }
+      : c),
+  }));
+  const createAndAddRole = (threadName, title, role, stepNum) => {
+    const defaultChapterId = (chapterFilter && chapterFilter !== 'all') ? chapterFilter
+      : ((chapters[chapters.length - 1] && chapters[chapters.length - 1].id) || null);
+    setState(s => ({
+      ...s, cards: [...s.cards, {
+        id: uid(), act: null, gapIndex: null, chapterId: defaultChapterId, title, text: '', notes: '',
+        tags: [{ id: uid(), type: 'Thread', role, note: threadName }],
+        values: [], placeholder: GENERIC_PLACEHOLDER, customColor: null, major: false,
+      }],
+    }));
+  };
+  const removeThreadTag = (cardId, tagId) => setState(s => ({
+    ...s, cards: s.cards.map(c => c.id === cardId ? { ...c, tags: c.tags.filter(t => t.id !== tagId) } : c),
+  }));
+  const renameThread = (oldName, newName) => setState(s => {
+    if (!newName.trim() || newName === oldName) return s;
+    const notes = { ...s.threadNotes };
+    if (oldName in notes) { notes[newName] = notes[oldName]; delete notes[oldName]; }
+    const colors = { ...(s.threadColors || {}) };
+    if (oldName in colors) { colors[newName] = colors[oldName]; delete colors[oldName]; }
+    const lanes = { ...(s.threadLanes || {}) };
+    if (oldName in lanes) { lanes[newName] = lanes[oldName]; delete lanes[oldName]; }
+    return {
+      ...s,
+      threads: s.threads.map(t => t === oldName ? newName : t),
+      cards: s.cards.map(c => ({ ...c, tags: c.tags.map(t => (t.type === 'Thread' && t.note === oldName) ? { ...t, note: newName } : t) })),
+      threadNotes: notes,
+      threadColors: colors,
+      threadLanes: lanes,
+    };
+  });
+  const setThreadColorOverride = (name, hex) => setState(s => ({ ...s, threadColors: { ...(s.threadColors || {}), [name]: hex } }));
+  const deleteThread = (name) => {
+    setState(s => {
+      const notes = { ...s.threadNotes };
+      delete notes[name];
+      const colors = { ...(s.threadColors || {}) };
+      delete colors[name];
+      const lanes = { ...(s.threadLanes || {}) };
+      delete lanes[name];
+      return {
+        ...s,
+        threads: s.threads.filter(t => t !== name),
+        cards: s.cards.map(c => ({ ...c, tags: c.tags.filter(t => !(t.type === 'Thread' && t.note === name)) })),
+        threadNotes: notes,
+        threadColors: colors,
+        threadLanes: lanes,
+      };
+    });
+    setThreadPopup(null);
+    setLockedThreads(prev => prev.filter(n => n !== name));
+  };
+  const updateThreadNotes = (name, text) => setState(s => ({ ...s, threadNotes: { ...s.threadNotes, [name]: text } }));
+
+  const ringAnchorR = 105;
+
+  return (
+    <div style={{ padding: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 2, background: '#f4f4f4', borderRadius: 8, padding: 2 }}>
+          <button onClick={() => setMode('story')} style={{ ...btnStyle, border: 'none', background: mode === 'story' ? '#fff' : 'transparent', fontWeight: mode === 'story' ? 600 : 400 }}>Story</button>
+          <button onClick={() => setMode('threads')} style={{ ...btnStyle, border: 'none', background: mode === 'threads' ? '#fff' : 'transparent', fontWeight: mode === 'threads' ? 600 : 400 }}>Threads</button>
+        </div>
+        {mode === 'story' && (
+          <button onClick={openStagesEditor} style={btnStyle} title="Rename or hide the eight stage labels in the ring's center">✎ Stage labels</button>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title="Spin the ring — wedges and labels stay upright, only their position moves">
+          <span style={{ fontSize: 12, color: '#888' }}>Rotate</span>
+          <input type="range" min={0} max={359} step={1} value={ringRotation}
+            onChange={e => setRingRotation(Number(e.target.value))} style={{ width: 100 }} />
+          {ringRotation !== 0 && (
+            <button onClick={() => setRingRotation(0)} style={{ ...btnStyle, padding: '2px 8px' }} title="Reset rotation">Reset</button>
+          )}
+        </div>
+        <button onClick={() => setDebug(d => !d)} style={{ ...btnStyle, background: debug ? '#333' : '#fff', color: debug ? '#fff' : '#333' }} title="Show wedge geometry guides">Debug</button>
+        {onOpenClassic && (
+          <button onClick={onOpenClassic} style={{ border: 'none', background: 'none', color: '#999', textDecoration: 'underline', cursor: 'pointer', fontSize: 12, marginLeft: 'auto' }}>
+            Switch to simple Circle view
+          </button>
+        )}
+      </div>
+      <HelpNote on={help}>Story mode shows the eight beats of the Campbell/Harmon Hero's Journey around the ring — rename or hide them with "Stage labels" if your story doesn't map onto this shape. Threads mode shows setup → payoff connections instead; click a thread to lock it and dim everything else. Rotate spins the ring without moving cards relative to each other. Scenes with no act sit in the outer track: drag one onto a gap in the ring to place it there, or drag a ring scene out to the track to unplace it.</HelpNote>
+
+      {stagesOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+          onClick={() => setStagesOpen(false)}>
+          <div style={{ background: '#fff', borderRadius: 10, width: 340, padding: 20, boxShadow: '0 8px 30px rgba(0,0,0,0.25)' }}
+            onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 14px', fontSize: 15 }}>Stage labels</h3>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, marginBottom: 12 }}>
+              <input type="checkbox" checked={stagesHiddenDraft} onChange={e => setStagesHiddenDraft(e.target.checked)} />
+              Hide stage labels in the ring's center
+            </label>
+            {!stagesHiddenDraft && stagesDraft.map((label, i) => (
+              <input key={i} value={label}
+                onChange={e => setStagesDraft(prev => prev.map((x, j) => j === i ? e.target.value : x))}
+                style={{ fontSize: 13, border: '1px solid #ddd', borderRadius: 8, padding: '5px 9px', width: '100%', boxSizing: 'border-box', marginBottom: 6 }} />
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
+              <button onClick={() => setStagesOpen(false)} style={btnStyle}>Cancel</button>
+              <button onClick={saveStages} style={{ ...btnStyle, border: 'none', background: '#222', color: '#fff' }}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mode === 'threads' && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '10px 0' }}>
+          <button onClick={() => setLockedThreads([])}
+            style={{ ...chipStyle, ...(lockedThreads.length === 0 ? chipActiveStyle : {}) }}>All threads</button>
+          {threadNames.map(name => (
+            <button key={name} onClick={() => { ensureLockedThread(name); setThreadPopup(name); }}
+              style={{ ...chipStyle, display: 'flex', alignItems: 'center', gap: 5, ...(lockedThreads.includes(name) ? chipActiveStyle : {}) }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: threadColor(name), display: 'inline-block' }} />
+              {name}
+            </button>
+          ))}
+          {threadNames.length === 0 && <span style={{ fontSize: 12, color: '#999' }}>No threads yet — tag a card as a Thread setup or payoff first.</span>}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
+        <div style={{ flex: 1, minWidth: 0, overflow: 'auto', border: '1px solid #eee', borderRadius: 10 }}>
+          <svg ref={svgRef} width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ userSelect: 'none' }}
+            onClick={() => { if (justDragged.current) return; setHoveredId(null); if (mode === 'threads') setLockedThreads([]); }}>
+            {(trackCards.length > 0 || (drag && drag.from === 'ring')) && (
+              <circle cx={cx} cy={cy} r={trc} fill="none" stroke={drag && drag.from === 'ring' && drag.r >= ro + 6 ? '#185FA5' : '#999'}
+                strokeWidth={tro - tri} strokeDasharray="3 5" opacity={drag && drag.from === 'ring' && drag.r >= ro + 6 ? 0.3 : 0.18} style={{ pointerEvents: 'none' }} />
+            )}
+            {trackCards.map((c, idx) => {
+              const dragging = drag && drag.id === c.id && drag.from === 'track';
+              if (dragging && drag.r < ro + 6) return null;
+              const mid = dragging ? normAngle(drag.a) : trackMid(c, idx);
+              const a0 = mid - perSlot / 2, a1 = mid + perSlot / 2;
+              const bottom = Math.sin(mid * Math.PI / 180) > 0.0001;
+              const arcLen = perSlot * Math.PI / 180 * trc * 0.88;
+              const lines = wrapTrackTitle(c.title, Math.max(4, Math.floor(arcLen / 6.3)));
+              const radii = lines.length === 1
+                ? [bottom ? trc + 4 : trc - 4]
+                : (bottom ? [trc - 3, trc + 11] : [trc + 3, trc - 11]);
+              const cardThreads = mode === 'threads' ? cardThreadsOf(c.id) : [];
+              const dimmed = mode === 'threads' && effectiveThreads.length > 0 && !cardThreads.some(t => effectiveThreads.includes(t));
+              const isHovered = hoveredId === c.id;
+              const m = 2.5;
+              return (
+                <React.Fragment key={'trk' + c.id}>
+                  <path d={sectorPath(cx, cy, tri + 2, tro - 2, a0, a1)}
+                    fill={resolveColor(c)} stroke={dragging ? '#185FA5' : resolveBorder(c)} strokeWidth={dragging ? 3 : (isHovered ? 2.5 : 1)}
+                    opacity={dimmed ? 0.15 : 1} style={{ cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none' }}
+                    onPointerDown={e => startDrag(e, c, 'track')}
+                    onMouseEnter={() => { if (!drag) setHoveredId(c.id); if (mode === 'threads' && cardThreads.length) setHoverThread(cardThreads[0]); }}
+                    onMouseLeave={() => { setHoveredId(null); if (mode === 'threads') setHoverThread(null); }}
+                    onClick={(e) => { e.stopPropagation(); if (justDragged.current) return; if (mode === 'threads') { if (cardThreads.length) { const ct = cardThreads[0]; if (lockedThreads.includes(ct)) setHoverThread(null); toggleLockedThread(ct); } } else { setPopupCard(c.id); } }}
+                    onDoubleClick={(e) => { e.stopPropagation(); setPopupCard(c.id); }} />
+                  {lines.map((ln, j) => {
+                    const r = radii[j];
+                    const s0 = bottom ? polar(cx, cy, r, a1 - m) : polar(cx, cy, r, a0 + m);
+                    const s1 = bottom ? polar(cx, cy, r, a0 + m) : polar(cx, cy, r, a1 - m);
+                    const pid = `trk-${c.id}-${j}`;
+                    return (
+                      <React.Fragment key={j}>
+                        <defs><path id={pid} d={`M${s0.x} ${s0.y} A${r} ${r} 0 0 ${bottom ? 0 : 1} ${s1.x} ${s1.y}`} /></defs>
+                        <text fontSize="11" fill="#333" textAnchor="middle" fontWeight={c.major ? 700 : 400} opacity={dimmed ? 0.15 : 1} style={{ pointerEvents: 'none' }}>
+                          <textPath href={`#${pid}`} startOffset="50%">{(c.major && j === 0 ? '\u2605 ' : '') + ln}</textPath>
+                        </text>
+                      </React.Fragment>
+                    );
+                  })}
+                </React.Fragment>
+              );
+            })}
+            {mode === 'story' && !stagesHidden && stages.map((stage, i) => {
+              const angle = -90 + i * 45 + ringRotation;
+              const p = polar(cx, cy, ringAnchorR, angle);
+              const lozW = stage.length * 8 + 20;
+              const lozH = 22;
+              return (
+                <foreignObject key={i} x={p.x - lozW / 2} y={p.y - lozH / 2} width={lozW} height={lozH} style={{ overflow: 'visible', pointerEvents: 'none' }}>
+                  <div style={{
+                    width: '100%', height: '100%', background: '#e8e6e2', border: '1px solid #d2cfc9',
+                    borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 11, fontWeight: 600, color: '#555',
+                  }}>{stage}</div>
+                </foreignObject>
+              );
+            })}
+            {mode === 'threads' && threadNames.map(name => {
+              const color = threadColor(name);
+              const hub = threadHub(name);
+              const isActive = effectiveThreads.length === 0 || effectiveThreads.includes(name);
+              const lineOp = isActive ? 0.85 : 0.08;
+              const hubOp = isActive ? 1 : 0.15;
+              const enter = () => setHoverThread(name);
+              const leave = () => setHoverThread(null);
+              const lock = (e) => { e.stopPropagation(); toggleLockedThread(name); };
+              const d = threadData[name] || { setups: [], payoffs: [] };
+              return (
+                <React.Fragment key={name}>
+                  {d.setups.map(cid => anchorPos[cid] && (
+                    <React.Fragment key={'s' + cid}>
+                      <path d={`M${anchorPos[cid].x} ${anchorPos[cid].y} L${hub.x} ${hub.y}`} stroke={color} strokeWidth={10} opacity={0} style={{ cursor: 'pointer' }}
+                        onMouseEnter={enter} onMouseLeave={leave} onClick={lock} />
+                      <path d={`M${anchorPos[cid].x} ${anchorPos[cid].y} L${hub.x} ${hub.y}`} stroke={color} strokeWidth={2} opacity={lineOp} fill="none" />
+                    </React.Fragment>
+                  ))}
+                  {d.payoffs.map(cid => anchorPos[cid] && (
+                    <React.Fragment key={'p' + cid}>
+                      <path d={`M${hub.x} ${hub.y} L${anchorPos[cid].x} ${anchorPos[cid].y}`} stroke={color} strokeWidth={10} opacity={0} style={{ cursor: 'pointer' }}
+                        onMouseEnter={enter} onMouseLeave={leave} onClick={lock} />
+                      <path d={`M${hub.x} ${hub.y} L${anchorPos[cid].x} ${anchorPos[cid].y}`} stroke={color} strokeWidth={2} opacity={lineOp} fill="none" />
+                    </React.Fragment>
+                  ))}
+                  <circle cx={hub.x} cy={hub.y} r={16} fill="transparent" style={{ cursor: 'pointer' }}
+                    onMouseEnter={enter} onMouseLeave={leave}
+                    onClick={(e) => { e.stopPropagation(); if (lockedThreads.includes(name)) setHoverThread(null); toggleLockedThread(name); }}
+                    onDoubleClick={(e) => { e.stopPropagation(); ensureLockedThread(name); setThreadPopup(name); }} />
+                  <circle cx={hub.x} cy={hub.y} r={9} fill={color} opacity={hubOp} style={{ pointerEvents: 'none' }} />
+                </React.Fragment>
+              );
+            })}
+            {ringCards.map(c => {
+              const w = wedgeById[c.id];
+              if (!w) return null;
+              const midR = (ri + ro) / 2;
+              const mid = (w.a0 + w.a1) / 2;
+              const p = polar(cx, cy, midR, mid);
+              const rot = ringLabelRotation(mid);
+              const spanRad = ((w.a1 - w.a0) * Math.PI) / 180;
+              const radialLen = (ro - ri) * 0.92;
+              const tangLen = 2 * (ri + (ro - ri) * 0.3) * Math.sin(spanRad / 2) * 0.9;
+              const fit = fitRingLabel(c.title, radialLen, tangLen);
+              const cardThreads = mode === 'threads' ? cardThreadsOf(c.id) : [];
+              const dimmed = mode === 'threads' && effectiveThreads.length > 0 && !cardThreads.some(t => effectiveThreads.includes(t));
+              const isHovered = hoveredId === c.id;
+              const lp = polar(cx, cy, ro + 16, mid);
+              return (
+                <React.Fragment key={c.id}>
+                  <path d={sectorPath(cx, cy, ri, ro, w.a0, w.a1)}
+                    fill={resolveColor(c)} stroke={resolveBorder(c)} strokeWidth={isHovered ? 2.5 : 1}
+                    opacity={dimmed ? 0.15 : 1} style={{ cursor: 'pointer' }}
+                    onPointerDown={mode === 'story' ? (e => startDrag(e, c, 'ring')) : undefined}
+                    onMouseEnter={() => { if (!drag) setHoveredId(c.id); if (mode === 'threads' && cardThreads.length) setHoverThread(cardThreads[0]); }}
+                    onMouseLeave={() => { setHoveredId(null); if (mode === 'threads') setHoverThread(null); }}
+                    onClick={(e) => { e.stopPropagation(); if (justDragged.current) return; if (mode === 'threads') { if (cardThreads.length) { const ct = cardThreads[0]; if (lockedThreads.includes(ct)) setHoverThread(null); toggleLockedThread(ct); } } else { setPopupCard(c.id); } }}
+                    onDoubleClick={(e) => { e.stopPropagation(); setPopupCard(c.id); }} />
+                  {fit && (
+                    <foreignObject x={p.x - radialLen / 2} y={p.y - tangLen / 2} width={radialLen} height={tangLen} style={{ overflow: 'visible', pointerEvents: 'none' }}>
+                      <div style={{
+                        width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center',
+                        transform: `rotate(${rot}deg)`, fontSize: fit.fs, lineHeight: `${fit.lh}px`, color: '#333', fontWeight: c.major ? 700 : 400,
+                        wordBreak: 'break-word', whiteSpace: 'normal',
+                      }}>{c.major ? '★ ' : ''}{c.title}</div>
+                    </foreignObject>
+                  )}
+                  {isHovered && (
+                    <foreignObject x={lp.x - 90} y={lp.y - 24} width={180} height={80} style={{ overflow: 'visible', pointerEvents: 'none' }}>
+                      <div style={{ background: '#222', color: '#fff', borderRadius: 8, padding: '6px 9px', fontSize: 11, lineHeight: 1.4, boxShadow: '0 4px 14px rgba(0,0,0,0.25)' }}>
+                        <div style={{ fontWeight: 600 }}>{c.title}</div>
+                        <div style={{ opacity: 0.75 }}>
+                          {(chapters.find(ch => ch.id === c.chapterId) || {}).title || 'Unassigned chapter'}{c.act ? ` · ${ACT_NAMES[c.act]}` : ''}
+                        </div>
+                        {cardThreadsOf(c.id).length > 0 && <div style={{ opacity: 0.75 }}>{cardThreadsOf(c.id).join(', ')}</div>}
+                      </div>
+                    </foreignObject>
+                  )}
+                  {debug && (
+                    <g style={{ pointerEvents: 'none' }}>
+                      <line x1={polar(cx, cy, ri, mid).x} y1={polar(cx, cy, ri, mid).y} x2={polar(cx, cy, ro, mid).x} y2={polar(cx, cy, ro, mid).y}
+                        stroke="#e0245e" strokeWidth="0.75" strokeDasharray="4 3" />
+                      <line x1={p.x - 6} y1={p.y} x2={p.x + 6} y2={p.y} stroke="#e0245e" strokeWidth="1.5" />
+                      <line x1={p.x} y1={p.y - 6} x2={p.x} y2={p.y + 6} stroke="#e0245e" strokeWidth="1.5" />
+                      <text x={lp.x} y={lp.y} fontSize="10" fill="#e0245e" textAnchor="middle">{stages[w.g]} {w.i + 1}/{w.n}{fit ? '' : ' (no label)'}</text>
+                    </g>
+                  )}
+                </React.Fragment>
+              );
+            })}
+            {drag && drag.r < ro + 6 && (() => {
+              const c = cards.find(x => x.id === drag.id);
+              if (!c) return null;
+              const ins = drag.from === 'track' && drag.r >= ri - 10 ? insertAt(drag.a) : null;
+              const p1 = ins ? polar(cx, cy, ri - 6, ins.ang) : null, p2 = ins ? polar(cx, cy, ro + 6, ins.ang) : null;
+              return (
+                <g style={{ pointerEvents: 'none' }}>
+                  {ins && <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke="#185FA5" strokeWidth="5" strokeLinecap="round" />}
+                  <foreignObject x={drag.x + 10} y={drag.y + 10} width={180} height={30} style={{ overflow: 'visible' }}>
+                    <div style={{ background: '#222', color: '#fff', borderRadius: 8, padding: '4px 9px', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180, boxSizing: 'border-box' }}>{c.title}</div>
+                  </foreignObject>
+                </g>
+              );
+            })()}
+            {!drag && hoveredId && trackCards.some(c => c.id === hoveredId) && (() => {
+              const c = trackCards.find(x => x.id === hoveredId);
+              return (
+                <foreignObject x={cx - 90} y={cy - 30} width={180} height={80} style={{ overflow: 'visible', pointerEvents: 'none' }}>
+                  <div style={{ background: '#222', color: '#fff', borderRadius: 8, padding: '6px 9px', fontSize: 11, lineHeight: 1.4, boxShadow: '0 4px 14px rgba(0,0,0,0.25)' }}>
+                    <div style={{ fontWeight: 600 }}>{c.title}</div>
+                    <div style={{ opacity: 0.75 }}>Unplaced · {(chapters.find(ch => ch.id === c.chapterId) || {}).title || 'Unassigned chapter'}</div>
+                    {cardThreadsOf(c.id).length > 0 && <div style={{ opacity: 0.75 }}>{cardThreadsOf(c.id).join(', ')}</div>}
+                  </div>
+                </foreignObject>
+              );
+            })()}
+          </svg>
+        </div>
+
+        {mode === 'threads' && (
+          <ThreadsPanel threadNames={threadNames} threadData={threadData} cards={cards} threadColor={threadColor}
+            lockedThreads={lockedThreads} hoverThread={hoverThread} onToggle={toggleLockedThread}
+            onOpenPopup={name => { ensureLockedThread(name); setThreadPopup(name); }} />
+        )}
+      </div>
+
+      {mode === 'threads' && (
+        <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>Hover a line, hub, or wedge to preview its thread. Click to lock the dimming. Click a hub to edit that thread.</div>
+      )}
+
+      <RemoteControl cards={cards} updateCard={updateCard} setState={setState} chapterFilter={chapterFilter} chapters={chapters} />
+
+      {popupCard && (
+        <CardEditModal
+          card={cards.find(c => c.id === popupCard)} cards={cards} onClose={() => setPopupCard(null)}
+          updateCard={p => updateCard(popupCard, p)} onNudge={dir => nudgeCard(popupCard, dir)}
+          onDelete={() => removeCard(popupCard)}
+          characters={characters} threads={threads} valuesLib={values} onAddThread={addLib('threads')}
+          tagTypes={tagTypes} onAddTagType={addLib('tagTypes')}
+        />
+      )}
+
+      {threadPopup && (
+        <ThreadEditPopup
+          name={threadPopup} data={threadData[threadPopup] || { setups: [], payoffs: [], steps: [] }}
+          cards={cards} color={threadColor(threadPopup)}
+          colorOverride={(threadColors && threadColors[threadPopup]) || null}
+          onColorChange={hex => setThreadColorOverride(threadPopup, hex)}
+          notes={(threadNotes && threadNotes[threadPopup]) || ''}
+          onClose={() => setThreadPopup(null)}
+          onRename={newName => { renameThread(threadPopup, newName); setThreadPopup(newName); setLockedThreads(prev => prev.map(n => n === threadPopup ? newName : n)); }}
+          onAddRole={(cardId, role, stepNum) => addThreadRole(threadPopup, cardId, role, stepNum)}
+          onCreateAndAddRole={(title, role, stepNum) => createAndAddRole(threadPopup, title, role, stepNum)}
+          onRemoveTag={(cardId, tagId) => removeThreadTag(cardId, tagId)}
+          onDelete={() => deleteThread(threadPopup)}
+          onNotesChange={text => updateThreadNotes(threadPopup, text)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ============================== WORD COUNT ============================== */
+
+function parseWords(v) {
+  const n = parseInt(String(v).replace(/[^0-9]/g, ''), 10);
+  return Number.isFinite(n) ? n : null;
+}
+function fmtWords(n) { return Math.round(n).toLocaleString('en-GB'); }
+
+// Unwritten scenes share whatever is left of the goal (after manual scene targets), so the split
+// re-balances as written scenes come in over or under their share.
+function wordStats(cards, goal) {
+  const isWritten = c => (c.words || 0) > 0;
+  const manual = c => (c.wordTarget || 0) > 0;
+  const total = cards.reduce((n, c) => n + (c.words || 0), 0);
+  const unwritten = cards.filter(c => !isWritten(c));
+  const auto = unwritten.filter(c => !manual(c));
+  const manualSum = unwritten.filter(manual).reduce((n, c) => n + c.wordTarget, 0);
+  const remaining = goal > 0 ? Math.max(0, goal - total) : 0;
+  const autoEach = goal > 0 && auto.length ? Math.max(0, remaining - manualSum) / auto.length : 0;
+  const targetOf = (c) => manual(c) ? c.wordTarget : (!isWritten(c) && goal > 0 ? Math.round(autoEach) : null);
+  return { total, goal, remaining, unwrittenCount: unwritten.length, autoCount: auto.length, autoEach, writtenCount: cards.length - unwritten.length, targetOf };
+}
+
+function WordMeter({ cards, goal, onGoal, onOpen }) {
+  const total = cards.reduce((n, c) => n + (c.words || 0), 0);
+  const pct = goal > 0 ? Math.round(total / goal * 100) : 0;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '6px 16px', borderBottom: '1px solid #eee', fontSize: 12, color: '#555', flexWrap: 'wrap' }}>
+      <span style={{ whiteSpace: 'nowrap' }}><b style={{ fontSize: 14, color: '#222' }}>{fmtWords(total)}</b>{goal > 0 ? ` / ${fmtWords(goal)}` : ''} words</span>
+      {goal > 0 && (
+        <>
+          <div style={{ flex: 1, minWidth: 80, maxWidth: 420, height: 6, borderRadius: 3, background: '#eee', overflow: 'hidden' }}>
+            <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', background: '#378ADD' }} />
+          </div>
+          <span>{pct}%</span>
+        </>
+      )}
+      <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>Goal
+        <input type="number" min="0" value={goal || ''} placeholder="e.g. 80000" onChange={e => onGoal(parseWords(e.target.value))}
+          style={{ width: 84, fontSize: 12 }} />
+      </label>
+      <button onClick={onOpen} style={{ ...btnStyle, fontSize: 11 }}>Word count</button>
+    </div>
+  );
+}
+
+function WordCountView({ state, setState, chapterFilter, help }) {
+  const { cards, chapters } = state;
+  const goal = state.wordGoal || 0;
+  const st = useMemo(() => wordStats(cards, goal), [cards, goal]);
+  const order = useMemo(() => chronoOrderMap(cards, chapters), [cards, chapters]);
+  const ordered = useMemo(() => [...cards].sort((a, b) => (order[a.id] ?? 1e9) - (order[b.id] ?? 1e9)), [cards, order]);
+  const rows = filterByChapter(ordered, chapterFilter);
+  const chapterTitle = (id) => (chapters.find(ch => ch.id === id) || {}).title || '';
+  const updateCard = (id, patch) => setState(s => ({ ...s, cards: s.cards.map(c => c.id === id ? { ...c, ...patch } : c) }));
+  const maxWords = Math.max(1, ...rows.map(c => c.words || 0));
+
+  const n = ordered.length;
+  let run = 0;
+  const cum = ordered.map(c => (run += (c.words || 0)));
+  const ymax = Math.max(goal, st.total, 1);
+  const px = (i) => 10 + (n > 1 ? i / (n - 1) : 0) * 620;
+  const py = (v) => 80 - (v / ymax) * 70;
+
+  const metric = (label, value) => (
+    <div style={{ background: '#f7f6f4', borderRadius: 8, padding: '10px 12px', flex: 1, minWidth: 120 }}>
+      <div style={{ fontSize: 11, color: '#777' }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 600 }}>{value}</div>
+    </div>
+  );
+  const th = { textAlign: 'left', fontSize: 11, color: '#777', fontWeight: 400, padding: '6px 8px', borderBottom: '1px solid #eee' };
+  const td = { padding: '5px 8px', borderBottom: '1px solid #f0f0f0', fontSize: 13 };
+
+  return (
+    <div style={{ padding: 16 }}>
+      <HelpNote on={help}>Enter each scene's word count as you write it in your other software. Scenes you haven't written yet share what's left of the goal equally, so their targets re-balance as written scenes run long or short. Type a target on any scene to set its share yourself.</HelpNote>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+        {metric('Total', fmtWords(st.total))}
+        <div style={{ background: '#f7f6f4', borderRadius: 8, padding: '10px 12px', flex: 1, minWidth: 120 }}>
+          <div style={{ fontSize: 11, color: '#777' }}>Goal</div>
+          <input type="number" min="0" value={goal || ''} placeholder="not set" onChange={e => setState(s => ({ ...s, wordGoal: parseWords(e.target.value) }))}
+            style={{ width: 110, fontSize: 18, fontWeight: 600, border: 'none', background: 'transparent' }} />
+        </div>
+        {metric('Remaining', goal > 0 ? fmtWords(st.remaining) : '—')}
+        {metric('Avg per written scene', st.writtenCount ? fmtWords(st.total / st.writtenCount) : '—')}
+      </div>
+
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr>
+            <th style={th}>Scene</th><th style={th}>Chapter</th>
+            <th style={th}>Words</th><th style={th}>Target</th><th style={{ ...th, width: '26%' }}>Progress</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(c => {
+            const target = st.targetOf(c);
+            const manual = (c.wordTarget || 0) > 0;
+            const denom = manual ? c.wordTarget : (target || maxWords);
+            const pct = Math.min(100, Math.round(((c.words || 0) / Math.max(1, denom)) * 100));
+            return (
+              <tr key={c.id}>
+                <td style={td}>{c.title || 'Untitled'}</td>
+                <td style={{ ...td, color: '#777' }}>{chapterTitle(c.chapterId)}</td>
+                <td style={td}>
+                  <input type="number" min="0" value={c.words ?? ''} onChange={e => updateCard(c.id, { words: parseWords(e.target.value) })} style={{ width: 80, fontSize: 12 }} />
+                </td>
+                <td style={td}>
+                  <input type="number" min="0" value={c.wordTarget ?? ''} placeholder={target != null && !manual ? `~${fmtWords(target)}` : 'auto'}
+                    onChange={e => updateCard(c.id, { wordTarget: parseWords(e.target.value) })} style={{ width: 80, fontSize: 12 }} />
+                </td>
+                <td style={td}>
+                  <div style={{ height: 8, borderRadius: 4, background: '#eee', overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: '#378ADD' }} />
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {goal > 0 && st.autoCount > 0 && (
+        <div style={{ fontSize: 12, color: '#777', marginTop: 8 }}>
+          {st.autoCount} unwritten scene{st.autoCount === 1 ? '' : 's'} share the remaining {fmtWords(st.remaining)} words: about {fmtWords(st.autoEach)} each.
+        </div>
+      )}
+
+      {n > 1 && (goal > 0 || st.total > 0) && (
+        <div style={{ marginTop: 14, background: '#f7f6f4', borderRadius: 8, padding: '8px 12px' }}>
+          <div style={{ fontSize: 11, color: '#777', marginBottom: 4 }}>Cumulative words by scene order{goal > 0 ? ' vs. even pace to goal' : ''}</div>
+          <svg viewBox="0 0 640 90" width="100%" role="img">
+            <title>Cumulative word count by scene order</title>
+            {goal > 0 && <line x1={px(0)} y1={py(goal / n)} x2={px(n - 1)} y2={py(goal)} stroke="#aaa" strokeWidth="1" strokeDasharray="4 4" />}
+            <polyline points={cum.map((v, i) => `${px(i)},${py(v)}`).join(' ')} fill="none" stroke="#378ADD" strokeWidth="2" />
+          </svg>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ZoomControls({ zoom, setZoom }) {
+  return (
+    <div style={{ display: 'flex', gap: 8 }}>
+      {['full', 'compact'].map(z => (
+        <button key={z} onClick={() => setZoom(z)}
+          style={{ ...btnStyle, background: zoom === z ? '#333' : '#fff', color: zoom === z ? '#fff' : '#333' }}>
+          {z}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ChipDivider({ onInsert }) {
+  return (
+    <div style={{ height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <button onClick={(e) => { e.stopPropagation(); onInsert(); }} title="Insert card here"
+        style={{ width: 18, height: 18, borderRadius: '50%', border: '1px solid #bbb', background: '#fff', color: '#666', fontSize: 12, lineHeight: '16px', cursor: 'pointer', padding: 0 }}>+</button>
+    </div>
+  );
+}
+
+function ChipStack({ ids, cards, gapIndexById, stages, stagesHidden, updateCard, onInsert, onDelete, onNudge, onOpenFull, onClose }) {
+  const orderedIds = cards.filter(c => ids.includes(c.id)).map(c => c.id);
+  const stageOf = id => (stagesHidden ? '' : (stages[gapIndexById[id]] ?? ''));
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
+      onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 260 }}>
+        <ChipDivider onInsert={() => onInsert(0)} />
+        {orderedIds.map((id, idx) => {
+          const c = cards.find(cc => cc.id === id);
+          if (!c) return null;
+          return (
+            <React.Fragment key={id}>
+              <div onDoubleClick={() => onOpenFull(id)}
+                style={{
+                  position: 'relative', borderRadius: 10, padding: 12, background: '#fff',
+                  border: idx === 0 ? '2px solid #378ADD' : '1px solid #ccc',
+                }}>
+                <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', gap: 2, alignItems: 'center' }}>
+                  <button onClick={(e) => { e.stopPropagation(); onNudge(id, -1); }} title="Move earlier"
+                    style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 12, padding: '0 2px' }}>↑</button>
+                  <button onClick={(e) => { e.stopPropagation(); onNudge(id, 1); }} title="Move later"
+                    style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 12, padding: '0 2px' }}>↓</button>
+                  <button onClick={(e) => { e.stopPropagation(); onDelete(id); }} title="Delete card"
+                    style={{ width: 18, height: 18, borderRadius: '50%', border: '1px solid #bbb', background: '#fff', color: '#666', fontSize: 12, lineHeight: '16px', cursor: 'pointer', padding: 0 }}>−</button>
+                </div>
+                <input value={c.title} onChange={e => updateCard(id, { title: e.target.value })}
+                  onClick={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}
+                  style={{ width: '100%', fontSize: 13, fontWeight: 600, border: 'none', background: 'transparent', padding: 0, paddingRight: 56, boxSizing: 'border-box' }} />
+                <div style={{ fontSize: 11, color: '#666', marginTop: 6 }}>{stageOf(id)}</div>
+              </div>
+              <ChipDivider onInsert={() => onInsert(idx + 1)} />
+            </React.Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ThreadsPanelRow({ name, isOpen, isLocked, isHovered, color, sceneTitles, onToggle, onOpenPopup }) {
+  return (
+    <div onClick={() => onToggle(name)}
+      style={{
+        border: `1px solid ${isLocked ? '#378ADD' : (isHovered ? '#85B7EB' : '#eee')}`, borderRadius: 8, padding: '8px 10px', marginBottom: 8,
+        background: isOpen ? '#fff8ee' : '#fafafa', cursor: 'pointer',
+        boxShadow: isHovered && !isLocked ? '0 0 0 2px rgba(55,111,212,0.25)' : 'none',
+      }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, display: 'inline-block' }} />
+          {name}
+        </div>
+        <button onClick={(e) => { e.stopPropagation(); onOpenPopup(name); }}
+          style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 12 }} title="Edit thread">✎</button>
+      </div>
+      <div style={{ fontSize: 11, color: '#666', marginTop: 4 }}>Linked scenes:</div>
+      {sceneTitles.length === 0 && <div style={{ fontSize: 11, color: '#999', paddingLeft: 4 }}>—</div>}
+      {sceneTitles.map((t, i) => <div key={i} style={{ fontSize: 11, color: '#333', paddingLeft: 4 }}>&bull; {t}</div>)}
+    </div>
+  );
+}
+
+function ThreadsPanel({ threadNames, threadData, cards, threadColor, lockedThreads, hoverThread, onToggle, onOpenPopup }) {
+  const [filter, setFilter] = useState('all');
+  const cardTitle = id => (cards.find(c => c.id === id) || {}).title || '—';
+  const names = threadNames.filter(n => threadData[n] && (threadData[n].setups.length > 0 || threadData[n].payoffs.length > 0 || threadData[n].steps.length > 0));
+  const open = names.filter(n => threadData[n].setups.length > 0 && threadData[n].payoffs.length === 0);
+  const resolved = names.filter(n => !open.includes(n));
+  const focused = lockedThreads.filter(n => names.includes(n));
+
+  const renderRow = n => (
+    <ThreadsPanelRow key={n} name={n} isOpen={open.includes(n)} isLocked={lockedThreads.includes(n)} isHovered={hoverThread === n}
+      color={threadColor(n)} sceneTitles={[...threadData[n].setups, ...threadData[n].steps.map(s => s.cardId), ...threadData[n].payoffs].map(cardTitle)}
+      onToggle={onToggle} onOpenPopup={onOpenPopup} />
+  );
+
+  return (
+    <div style={{ width: 220, flexShrink: 0, border: '1px solid #eee', borderRadius: 10, padding: '10px 12px', height: '100%', overflow: 'auto', boxSizing: 'border-box' }}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Threads</div>
+      {focused.length > 0 ? (
+        <>
+          <div style={{ fontSize: 10, color: '#999', marginBottom: 8, fontStyle: 'italic' }}>Showing only the highlighted thread{focused.length > 1 ? 's' : ''}</div>
+          {focused.map(renderRow)}
+        </>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 2, background: '#f4f4f4', borderRadius: 8, padding: 2, marginBottom: 10 }}>
+            <button onClick={() => setFilter('all')} style={{ ...btnStyle, flex: 1, border: 'none', background: filter === 'all' ? '#fff' : 'transparent', fontWeight: filter === 'all' ? 600 : 400 }}>All</button>
+            <button onClick={() => setFilter('unresolved')} style={{ ...btnStyle, flex: 1, border: 'none', background: filter === 'unresolved' ? '#fff' : 'transparent', fontWeight: filter === 'unresolved' ? 600 : 400 }}>Unresolved</button>
+            <button onClick={() => setFilter('resolved')} style={{ ...btnStyle, flex: 1, border: 'none', background: filter === 'resolved' ? '#fff' : 'transparent', fontWeight: filter === 'resolved' ? 600 : 400 }}>Resolved</button>
+          </div>
+          {filter !== 'resolved' && (
+            <>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#888', marginBottom: 6 }}>Open</div>
+              {open.length === 0 && <div style={{ fontSize: 11, color: '#999', marginBottom: 8 }}>None</div>}
+              {open.map(renderRow)}
+            </>
+          )}
+          {filter !== 'unresolved' && (
+            <>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#888', margin: '10px 0 6px' }}>Resolved</div>
+              {resolved.length === 0 && <div style={{ fontSize: 11, color: '#999' }}>None</div>}
+              {resolved.map(renderRow)}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ThreadEditPopup({ name, data, cards, color, colorOverride, onColorChange, notes, onClose, onRename, onAddRole, onCreateAndAddRole, onRemoveTag, onDelete, onNotesChange, allowRoleEdit = true }) {
+  const [nameInput, setNameInput] = useState(name);
+  const [addSetupId, setAddSetupId] = useState('');
+  const [addStepId, setAddStepId] = useState('');
+  const [addPayoffId, setAddPayoffId] = useState('');
+  const [newCardMode, setNewCardMode] = useState(null); // 'setup' | 'step' | 'payoff' | null
+  const [newCardTitle, setNewCardTitle] = useState('');
+
+  const startNewCard = (role) => { setNewCardMode(role); setNewCardTitle(''); };
+  const commitNewCard = (role) => {
+    const title = newCardTitle.trim();
+    if (!title || !onCreateAndAddRole) return;
+    onCreateAndAddRole(title, role);
+    setNewCardMode(null);
+    setNewCardTitle('');
+  };
+
+  const cardById = (id) => cards.find(c => c.id === id);
+  const setupTagFor = (cardId) => (cardById(cardId)?.tags || []).find(t => t.type === 'Thread' && t.role === 'setup' && t.note === name);
+  const stepTagFor = (cardId) => (cardById(cardId)?.tags || []).find(t => t.type === 'Thread' && t.role === 'step' && t.note === name);
+  const payoffTagFor = (cardId) => (cardById(cardId)?.tags || []).find(t => t.type === 'Thread' && t.role === 'payoff' && t.note === name);
+
+  const stepCardIds = data.steps.map(s => s.cardId);
+  const eligibleForSetup = cards.filter(c => !data.setups.includes(c.id));
+  const eligibleForStep = cards.filter(c => !stepCardIds.includes(c.id));
+  const eligibleForPayoff = cards.filter(c => !data.payoffs.includes(c.id));
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
+      onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 630, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', boxSizing: 'border-box', background: '#fff', borderRadius: 12, padding: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0 }} />
+          <input value={nameInput} onChange={e => setNameInput(e.target.value)}
+            onBlur={() => { if (nameInput.trim() && nameInput !== name) onRename(nameInput.trim()); }}
+            onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+            style={{ flex: 1, fontSize: 15, fontWeight: 600, border: '1px solid #ddd', borderRadius: 6, padding: '4px 8px' }} />
+          <button onClick={onClose} style={btnStyle}>Close</button>
+        </div>
+        {onColorChange && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+            <span style={{ fontSize: 12, color: '#999' }}>Color</span>
+            <ColorSwatchPicker value={colorOverride} onChange={onColorChange} palette={THREAD_COLOR_PALETTE} />
+            {colorOverride && (
+              <button onClick={() => onColorChange(null)} style={{ ...btnStyle, fontSize: 11 }}>Reset to auto</button>
+            )}
+          </div>
+        )}
+
+        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>Setups</div>
+        <div style={{ marginBottom: 10 }}>
+          {data.setups.length === 0 && <div style={{ fontSize: 13, color: '#999' }}>None yet.</div>}
+          {data.setups.map(cid => {
+            const c = cardById(cid);
+            if (!c) return null;
+            const tag = setupTagFor(cid);
+            return (
+              <div key={cid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, padding: '3px 0' }}>
+                <span>{c.title}</span>
+                {tag && <button onClick={() => onRemoveTag(cid, tag.id)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#999' }}>×</button>}
+              </div>
+            );
+          })}
+          {allowRoleEdit && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <select value={addSetupId} onChange={e => setAddSetupId(e.target.value)} style={{ flex: 1, fontSize: 12 }}>
+                <option value="">Choose a card...</option>
+                {eligibleForSetup.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+              </select>
+              <button onClick={() => { if (addSetupId) { onAddRole(addSetupId, 'setup'); setAddSetupId(''); } }}
+                style={{ ...btnStyle, fontSize: 12 }}>+ Add setup</button>
+            </div>
+          )}
+          {allowRoleEdit && onCreateAndAddRole && (newCardMode === 'setup' ? (
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <input autoFocus value={newCardTitle} onChange={e => setNewCardTitle(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') commitNewCard('setup'); if (e.key === 'Escape') setNewCardMode(null); }}
+                placeholder="Card title" style={{ flex: 1, fontSize: 12 }} />
+              <button onClick={() => commitNewCard('setup')} style={{ ...btnStyle, fontSize: 12 }}>Create</button>
+              <button onClick={() => setNewCardMode(null)} style={{ ...btnStyle, fontSize: 12 }}>Cancel</button>
+            </div>
+          ) : (
+            <button onClick={() => startNewCard('setup')} style={{ ...btnStyle, fontSize: 11.5, marginTop: 4, color: '#777' }}>+ New unplaced card</button>
+          ))}
+        </div>
+        {!allowRoleEdit && (
+          <div style={{ fontSize: 11, color: '#bbb', marginTop: -6, marginBottom: 10 }}>Switch to Swimlanes to add or change links.</div>
+        )}
+
+        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>Steps</div>
+        <div style={{ marginBottom: 10 }}>
+          {data.steps.length === 0 && <div style={{ fontSize: 13, color: '#999' }}>None yet — the beats that develop the thread between setup and payoff.</div>}
+          {data.steps.map(({ cardId: cid, step }) => {
+            const c = cardById(cid);
+            if (!c) return null;
+            const tag = stepTagFor(cid);
+            return (
+              <div key={cid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, padding: '3px 0' }}>
+                <span>Step {step}: {c.title}</span>
+                {tag && <button onClick={() => onRemoveTag(cid, tag.id)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#999' }}>×</button>}
+              </div>
+            );
+          })}
+          {allowRoleEdit && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <select value={addStepId} onChange={e => setAddStepId(e.target.value)} style={{ flex: 1, fontSize: 12 }}>
+                <option value="">Choose a card...</option>
+                {eligibleForStep.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+              </select>
+              <button onClick={() => { if (addStepId) { onAddRole(addStepId, 'step'); setAddStepId(''); } }}
+                style={{ ...btnStyle, fontSize: 12 }}>+ Add step</button>
+            </div>
+          )}
+          {allowRoleEdit && onCreateAndAddRole && (newCardMode === 'step' ? (
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <input autoFocus value={newCardTitle} onChange={e => setNewCardTitle(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') commitNewCard('step'); if (e.key === 'Escape') setNewCardMode(null); }}
+                placeholder="Card title" style={{ flex: 1, fontSize: 12 }} />
+              <button onClick={() => commitNewCard('step')} style={{ ...btnStyle, fontSize: 12 }}>Create</button>
+              <button onClick={() => setNewCardMode(null)} style={{ ...btnStyle, fontSize: 12 }}>Cancel</button>
+            </div>
+          ) : (
+            <button onClick={() => startNewCard('step')} style={{ ...btnStyle, fontSize: 11.5, marginTop: 4, color: '#777' }}>+ New unplaced card</button>
+          ))}
+        </div>
+
+        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>Payoffs</div>
+        <div style={{ marginBottom: 12 }}>
+          {data.payoffs.length === 0 && <div style={{ fontSize: 13, color: '#999' }}>None yet.</div>}
+          {data.payoffs.map(cid => {
+            const c = cardById(cid);
+            if (!c) return null;
+            const tag = payoffTagFor(cid);
+            return (
+              <div key={cid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, padding: '3px 0' }}>
+                <span>{c.title}</span>
+                {tag && <button onClick={() => onRemoveTag(cid, tag.id)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#999' }}>×</button>}
+              </div>
+            );
+          })}
+          {allowRoleEdit && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <select value={addPayoffId} onChange={e => setAddPayoffId(e.target.value)} style={{ flex: 1, fontSize: 12 }}>
+                <option value="">Choose a card...</option>
+                {eligibleForPayoff.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+              </select>
+              <button onClick={() => { if (addPayoffId) { onAddRole(addPayoffId, 'payoff'); setAddPayoffId(''); } }}
+                style={{ ...btnStyle, fontSize: 12 }}>+ Add payoff</button>
+            </div>
+          )}
+          {allowRoleEdit && onCreateAndAddRole && (newCardMode === 'payoff' ? (
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <input autoFocus value={newCardTitle} onChange={e => setNewCardTitle(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') commitNewCard('payoff'); if (e.key === 'Escape') setNewCardMode(null); }}
+                placeholder="Card title" style={{ flex: 1, fontSize: 12 }} />
+              <button onClick={() => commitNewCard('payoff')} style={{ ...btnStyle, fontSize: 12 }}>Create</button>
+              <button onClick={() => setNewCardMode(null)} style={{ ...btnStyle, fontSize: 12 }}>Cancel</button>
+            </div>
+          ) : (
+            <button onClick={() => startNewCard('payoff')} style={{ ...btnStyle, fontSize: 11.5, marginTop: 4, color: '#777' }}>+ New unplaced card</button>
+          ))}
+        </div>
+
+        {allowRoleEdit && onCreateAndAddRole && (
+          <div style={{ fontSize: 11, color: '#bbb', marginTop: -6, marginBottom: 10 }}>
+            Unplaced cards show up in Scene → Unassigned and Flowchart's unassigned column until you drag them into a chapter and act.
+          </div>
+        )}
+
+        <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>Notes / commentary</div>
+        <textarea value={notes} onChange={e => onNotesChange(e.target.value)}
+          placeholder="Paste a quote and citation, or write commentary about this thread..."
+          style={{ width: '100%', minHeight: 80, fontSize: 13, borderRadius: 6, border: '1px solid #ddd', padding: 6, boxSizing: 'border-box', resize: 'vertical', marginBottom: 12 }} />
+
+        <DeleteButton onDelete={onDelete} label="Delete this thread" />
+      </div>
+    </div>
+  );
+}
+
+function RemoteControl({ cards, updateCard, setState, chapterFilter, chapters }) {
+  const [selId, setSelId] = useState('');
+  const [newTitle, setNewTitle] = useState('');
+  const selCard = cards.find(c => c.id === selId);
+
+  const addCard = () => {
+    if (!newTitle.trim()) return;
+    const chapterId = chapterFilter !== 'all' ? chapterFilter : ((chapters[chapters.length - 1] && chapters[chapters.length - 1].id) || null);
+    setState(s => {
+      const arr = [...s.cards];
+      let insertAt = arr.length;
+      if (chapterId) {
+        for (let i = arr.length - 1; i >= 0; i--) { if (arr[i].chapterId === chapterId) { insertAt = i + 1; break; } }
+      }
+      arr.splice(insertAt, 0, { id: uid(), act: null, gapIndex: null, chapterId, title: newTitle.trim(), text: '', notes: '', tags: [], values: [], placeholder: GENERIC_PLACEHOLDER, customColor: null, major: false });
+      return { ...s, cards: arr };
+    });
+    setNewTitle('');
+  };
+
+  return (
+    <div style={{ marginTop: 16, border: '1px solid #eee', borderRadius: 10, padding: 12, maxWidth: 500 }}>
+      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Remote Control</div>
+      <div style={{ fontSize: 11, color: '#999', marginBottom: 8 }}>Ring position is automatic, based on card order in Scene.</div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+        <select value={selId} onChange={e => setSelId(e.target.value)} style={{ fontSize: 12 }}>
+          <option value="">Select a card...</option>
+          {cards.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+        </select>
+        {selCard && (
+          <>
+            <input value={selCard.title} onChange={e => updateCard(selCard.id, { title: e.target.value })} style={{ fontSize: 12, width: 120 }} />
+            <label style={{ fontSize: 12 }}>
+              <input type="checkbox" checked={!!selCard.major} onChange={e => updateCard(selCard.id, { major: e.target.checked })} /> ★ major
+            </label>
+            <DeleteButton label="Delete this card"
+              onDelete={() => { setState(s => ({ ...s, cards: s.cards.filter(c => c.id !== selCard.id) })); setSelId(''); }} />
+          </>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="New card title" style={{ fontSize: 12, width: 160 }} />
+        <button onClick={addCard} style={btnStyle}>+ Add card</button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================== ARC CHART VIEW ============================== */
+
+function ArcChartView({ state, chapterFilter, help }) {
+  const { characters, values, chapters } = state;
+  const cards = filterByChapter(state.cards, chapterFilter);
+  const chapterGrouping = chapterFilter === 'all' ? chapters : undefined;
+  const ordered = getOrderedForValues(cards, chapterGrouping);
+  const { chain } = buildValueChain(cards, chapterGrouping);
+
+  const runningVals = {};
+  values.forEach(v => { runningVals[v] = 0; });
+  const valueChartData = ordered.map((c, i) => {
+    const row = { index: i + 1, name: c.title };
+    values.forEach(v => {
+      if (chain[c.id] && chain[c.id][v]) runningVals[v] = chain[c.id][v].close;
+      row[v] = runningVals[v];
+    });
+    return row;
+  });
+
+  const tagTypesList = (state.tagTypes && state.tagTypes.length)
+    ? state.tagTypes
+    : Array.from(new Set(cards.flatMap(c => (c.tags || []).filter(t => t.type !== 'Thread').map(t => t.type))));
+  const dashPatterns = ['', '5 4', '2 2', '6 2 2 2', '1 3'];
+  const dashForType = (type) => dashPatterns[Math.max(0, tagTypesList.indexOf(type)) % dashPatterns.length];
+
+  const charCombos = [];
+  const seenCombo = new Set();
+  cards.forEach(c => (c.tags || []).forEach(t => {
+    if (t.type !== 'Thread' && t.char && characters.includes(t.char)) {
+      const key = t.char + '||' + t.type;
+      if (!seenCombo.has(key)) { seenCombo.add(key); charCombos.push({ char: t.char, type: t.type, key }); }
+    }
+  }));
+
+  const charTotals = {};
+  charCombos.forEach(({ key }) => { charTotals[key] = 0; });
+  const charChartData = ordered.map((c, i) => {
+    const row = { index: i + 1, name: c.title };
+    (c.tags || []).forEach(t => {
+      if (t.type !== 'Thread' && t.char && characters.includes(t.char)) {
+        charTotals[t.char + '||' + t.type] += t.direction === 'down' ? -1 : 1;
+      }
+    });
+    charCombos.forEach(({ key }) => { row[key] = charTotals[key]; });
+    return row;
+  });
+
+  const lineColors = ['#3b6fd4', '#3f9e4d', '#d4ab1f', '#d4791f', '#c93b3b', '#8a5fd4'];
+  // Freytag zones are one continuous band for the whole book, but act numbers are chapter-scoped
+  // (Act 1 in chapter 2 is not Act 1 of the book). This header strip groups act labels visibly by
+  // chapter above the chart, so the two hierarchies read as separate rather than conflicting.
+  const chapterSegs = (chapterGrouping || [])
+    .map(ch => ({ id: ch.id, title: ch.title, count: ordered.filter(c => c.chapterId === ch.id).length }))
+    .filter(seg => seg.count > 0);
+
+  const [dimmedValues, setDimmedValues] = useState([]);
+  const [dimmedChars, setDimmedChars] = useState([]);
+  const toggleDim = (setter) => (key) => setter(s => s.includes(key) ? s.filter(k => k !== key) : [...s, key]);
+
+  return (
+    <div style={{ maxWidth: 900, margin: '0 auto', padding: '12px 16px' }}>
+      <HelpNote on={help}>Story Value Arcs tracks how each value rises or falls as tagged cards go by. Character Arcs does the same per character and tag type; the shaded bands are the Freytag zones (setup / rising action / climax / falling action / resolution) for the whole book, while the dark strip above groups act numbers by chapter.</HelpNote>
+      <h3 style={{ fontSize: 14 }}>Story Value Arcs</h3>
+      {values.length === 0 ? <div style={{ fontSize: 13, color: '#999' }}>No values defined yet.</div> : (
+        <MiniLineChart data={valueChartData} keys={values.map((v, i) => ({ key: v, color: lineColors[i % lineColors.length] }))}
+          dimmed={dimmedValues} onToggleDim={toggleDim(setDimmedValues)} />
+      )}
+
+      <h3 style={{ fontSize: 14, marginTop: 24 }}>Character Arcs</h3>
+      {characters.length === 0 ? <div style={{ fontSize: 13, color: '#999' }}>No characters defined yet.</div> :
+       charCombos.length === 0 ? <div style={{ fontSize: 13, color: '#999' }}>No character tags yet.</div> : (
+       <>
+        {chapterSegs.length > 1 && (
+          <div style={{ display: 'flex', width: 760, maxWidth: '100%', boxSizing: 'border-box', paddingLeft: 40, paddingRight: 16, marginBottom: 3 }}>
+            {chapterSegs.map((seg, i) => (
+              <div key={seg.id} title={seg.title} style={{
+                flex: seg.count, minWidth: 0, borderLeft: i > 0 ? '1px dashed #999' : 'none',
+                textAlign: 'center', fontSize: 10, fontWeight: 600, color: '#fff', background: '#2a2a2a',
+                padding: '2px 4px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+              }}>{seg.title}</div>
+            ))}
+          </div>
+        )}
+        <MiniLineChart data={charChartData}
+          keys={charCombos.map(({ char, type, key }) => ({
+            key, name: `${char} — ${type}`,
+            color: lineColors[characters.indexOf(char) % lineColors.length],
+            dash: dashForType(type),
+          }))}
+          zones={FREYTAG_ZONES}
+          dimmed={dimmedChars} onToggleDim={toggleDim(setDimmedChars)} />
+       </>
+      )}
+    </div>
+  );
+}
+
+/* ============================== CHAPTER CONTROLS ============================== */
+
+function ChapterBar({ chapters, activeChapterId, setActiveChapterId, onAddChapter, reorderOpen, setReorderOpen, help }) {
+  const [adding, setAdding] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+
+  const commitAdd = () => {
+    if (newTitle.trim()) onAddChapter(newTitle.trim());
+    setNewTitle(''); setAdding(false);
+  };
+
+  return (
+    <div style={{ padding: '0 16px', borderBottom: '1px solid #eee' }}>
+    <HelpNote on={help}>Filters every view to one chapter, or "All" to see the whole story. "Reorder chapters" lets you drag chapters into a new order.</HelpNote>
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '8px 0' }}>
+      <span style={{ fontSize: 12, color: '#999', marginRight: 2, flexShrink: 0 }}>Chapter:</span>
+      <div style={{ display: 'flex', gap: 6, overflowX: 'auto', flex: 1, minWidth: 0, paddingBottom: 2 }}>
+        <button onClick={() => setActiveChapterId('all')}
+          style={{ ...chipStyle, flexShrink: 0, ...(activeChapterId === 'all' ? chipActiveStyle : {}) }}>All</button>
+        {chapters.map(ch => (
+          <button key={ch.id} onClick={() => setActiveChapterId(ch.id)}
+            style={{ ...chipStyle, flexShrink: 0, ...(activeChapterId === ch.id ? chipActiveStyle : {}) }}>{ch.title}</button>
+        ))}
+        {adding ? (
+          <input autoFocus value={newTitle} onChange={e => setNewTitle(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') commitAdd(); if (e.key === 'Escape') { setAdding(false); setNewTitle(''); } }}
+            onBlur={commitAdd} placeholder="Chapter title..."
+            style={{ fontSize: 12, border: '1px solid #ddd', borderRadius: 8, padding: '3px 8px', width: 130, flexShrink: 0 }} />
+        ) : (
+          <button onClick={() => setAdding(true)} style={{ ...chipStyle, flexShrink: 0 }} title="Add chapter">+</button>
+        )}
+      </div>
+      <button onClick={() => setReorderOpen(!reorderOpen)} style={{ ...btnStyle, flexShrink: 0 }}>
+        {reorderOpen ? 'Close reorder' : 'Reorder chapters'}
+      </button>
+    </div>
+    </div>
+  );
+}
+
+function ChapterReorderPanel({ chapters, cards, setState, activeChapterId, setActiveChapterId, setExpandedChapterIds }) {
+  const [dragId, setDragId] = useState(null);
+
+  const move = (fromId, toId) => {
+    if (fromId === toId) return;
+    setState(s => {
+      const arr = [...s.chapters];
+      const from = arr.findIndex(c => c.id === fromId);
+      const to = arr.findIndex(c => c.id === toId);
+      if (from === -1 || to === -1) return s;
+      const [moved] = arr.splice(from, 1);
+      arr.splice(to, 0, moved);
+      return { ...s, chapters: arr };
+    });
+  };
+
+  const rename = (id, title) => setState(s => ({ ...s, chapters: s.chapters.map(c => c.id === id ? { ...c, title } : c) }));
+
+  // Threads whose setup/step/payoff cards live in this chapter — deleting the chapter
+  // deletes those cards, which can silently break the thread's continuity elsewhere.
+  const threadsIn = (chapterId) => {
+    const names = new Set();
+    cards.filter(c => c.chapterId === chapterId).forEach(c => (c.tags || []).forEach(t => { if (t.type === 'Thread') names.add(t.note); }));
+    return [...names];
+  };
+
+  const remove = (id) => {
+    if (chapters.length <= 1) { window.alert('At least one chapter is required.'); return; }
+    setState(s => ({
+      ...s,
+      chapters: s.chapters.filter(c => c.id !== id),
+      cards: s.cards.filter(c => c.chapterId !== id),
+    }));
+    setExpandedChapterIds(prev => prev.filter(x => x !== id));
+    if (activeChapterId === id) setActiveChapterId('all');
+  };
+
+  return (
+    <div style={{ padding: '10px 16px', borderBottom: '1px solid #eee', maxWidth: 420 }}>
+      <div style={{ fontSize: 11, color: '#999', marginBottom: 8 }}>Drag to reorder. Sequence view and act-ordered charts follow this order.</div>
+      {chapters.map(ch => {
+        const affected = threadsIn(ch.id);
+        const label = affected.length
+          ? `Delete "${ch.title}" and all its cards — this passes through ${affected.length} thread${affected.length > 1 ? 's' : ''} (${affected.join(', ')}) and may break their continuity`
+          : `Delete "${ch.title}" and all its cards`;
+        return (
+          <div key={ch.id} draggable
+            onDragStart={() => setDragId(ch.id)}
+            onDragOver={e => e.preventDefault()}
+            onDrop={() => move(dragId, ch.id)}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid #eee', borderRadius: 8, marginBottom: 6, background: '#fff' }}>
+            <span style={{ cursor: 'grab', color: '#aaa' }}>⋮⋮</span>
+            <input value={ch.title} onChange={e => rename(ch.id, e.target.value)}
+              style={{ flex: 1, fontSize: 13, border: 'none', background: 'transparent' }} />
+            <DeleteButton label={label} onDelete={() => remove(ch.id)} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ============================== THREAD LIBRARY ============================== */
+
+function ThreadLibraryView({ state, setState, help }) {
+  const { cards, threads, characters, values, chapters, tagTypes, threadNotes, threadColors, threadLanes } = state;
+  const [popupCard, setPopupCard] = useState(null);
+  const [selectedThread, setSelectedThread] = useState(null);
+  const [clearOpen, setClearOpen] = useState(false);
+  const [clearMode, setClearMode] = useState('links');
+  const [display, setDisplay] = useState('swim'); // 'swim' | 'web'
+  const [manageThread, setManageThread] = useState(null);
+  const [newThreadOpen, setNewThreadOpen] = useState(false);
+  const [newThreadName, setNewThreadName] = useState('');
+  const [hoverPoint, setHoverPoint] = useState(null);
+  const webWrapRef = useRef(null);
+
+  const updateCard = (id, patch) => setState(s => ({ ...s, cards: s.cards.map(c => c.id === id ? { ...c, ...patch } : c) }));
+  const nudgeCard = (cardId, dir) => setState(s => {
+    const idx = s.cards.findIndex(c => c.id === cardId);
+    if (idx === -1) return s;
+    return { ...s, cards: nudgeWithActAdoption(s.cards, idx, dir) };
+  });
+  const addLib = (key) => (item) => setState(s => s[key].includes(item) ? s : { ...s, [key]: [...s[key], item] });
+
+  const threadColor = (name) => (threadColors && threadColors[name]) || THREAD_COLORS[hashColorIndex(name) % THREAD_COLORS.length] || '#888780';
+  const chapterTitle = (chapterId) => (chapters.find(ch => ch.id === chapterId) || {}).title || '';
+
+  // Ordered entries per thread, in story (card array) order — mirrors Circle's threadData
+  // but unfiltered by chapter, since threads span the whole story. Within a thread, entries
+  // are ranked setup first, then steps by their step number, then payoff last.
+  const roleRank = (e, order) => e.role === 'setup' ? -1e12 : e.role === 'payoff' ? 1e12 : (order[e.cardId] ?? 1e9);
+  const entriesByThread = useMemo(() => {
+    const map = {};
+    threads.forEach(name => { map[name] = []; });
+    cards.forEach(c => {
+      (c.tags || []).forEach(t => {
+        if (t.type === 'Thread') {
+          if (!map[t.note]) map[t.note] = [];
+          map[t.note].push({ cardId: c.id, role: t.role, tagId: t.id, title: c.title, chapter: chapterTitle(c.chapterId) });
+        }
+      });
+    });
+    const order = chronoOrderMap(cards, chapters);
+    Object.values(map).forEach(list => {
+      list.sort((a, b) => roleRank(a, order) - roleRank(b, order));
+      let n = 0;
+      list.forEach(e => { if (e.role === 'step') e.step = ++n; });
+    });
+    return map;
+  }, [cards, threads, chapters]);
+
+  const isResolved = (name) => (entriesByThread[name] || []).some(e => e.role === 'payoff');
+  const openNames = threads.filter(n => !isResolved(n));
+  const resolvedNames = threads.filter(n => isResolved(n));
+
+  // Thread Web lanes are assigned once per thread and kept for the thread's lifetime, so
+  // deleting one thread never shifts another's row. Freed numbers (from deleted threads) are
+  // reused by the next *new* thread rather than growing unboundedly.
+  useEffect(() => {
+    const missing = threads.filter(n => !threadLanes || threadLanes[n] === undefined);
+    if (missing.length === 0) return;
+    setState(s => {
+      const lanes = { ...(s.threadLanes || {}) };
+      missing.forEach(name => {
+        if (lanes[name] !== undefined) return;
+        let n = 0;
+        const used = new Set(Object.values(lanes));
+        while (used.has(n)) n++;
+        lanes[name] = n;
+      });
+      return { ...s, threadLanes: lanes };
+    });
+  }, [threads, threadLanes]);
+
+  // Web layout: threads as lines across story order, converging at cards shared by >1 thread.
+  // Always computed over every thread (not just the selected one) so lane positions stay put
+  // and shared-card convergence points remain visible; selection only affects render opacity.
+  const webLayout = useMemo(() => {
+    const cardIndex = {};
+    cards.forEach((c, i) => { cardIndex[c.id] = i; });
+    const laneGap = 64, yStart = 50, xStart = 90, xGap = 140;
+    const laneOf = {};
+    threads.forEach((name, i) => { laneOf[name] = (threadLanes && threadLanes[name] !== undefined) ? threadLanes[name] : i; });
+    const cardIdsUsed = new Set();
+    threads.forEach(name => (entriesByThread[name] || []).forEach(e => cardIdsUsed.add(e.cardId)));
+    const slots = [...cardIdsUsed].sort((a, b) => (cardIndex[a] ?? 0) - (cardIndex[b] ?? 0));
+    const slotOf = {};
+    slots.forEach((id, i) => { slotOf[id] = i; });
+    const threadsPerCard = {};
+    threads.forEach(name => (entriesByThread[name] || []).forEach(e => {
+      threadsPerCard[e.cardId] = (threadsPerCard[e.cardId] || 0) + 1;
+    }));
+    const sharedY = (cardId) => {
+      const involved = threads.filter(name => (entriesByThread[name] || []).some(e => e.cardId === cardId));
+      const ys = involved.map(name => yStart + laneOf[name] * laneGap);
+      return ys.reduce((a, b) => a + b, 0) / ys.length;
+    };
+    const lines = threads.map(name => {
+      const entries = [...(entriesByThread[name] || [])].sort((a, b) => (cardIndex[a.cardId] ?? 0) - (cardIndex[b.cardId] ?? 0));
+      const laneY = yStart + laneOf[name] * laneGap;
+      const points = entries.map(e => {
+        const shared = (threadsPerCard[e.cardId] || 0) > 1;
+        return { x: xStart + slotOf[e.cardId] * xGap, y: shared ? sharedY(e.cardId) : laneY, shared, entry: e };
+      });
+      return { name, color: threadColor(name), laneY, points };
+    });
+    const sharedNodes = [];
+    const seenShared = new Set();
+    lines.forEach(l => l.points.forEach(p => {
+      if (p.shared && !seenShared.has(p.entry.cardId)) { seenShared.add(p.entry.cardId); sharedNodes.push(p); }
+    }));
+    const width = Math.max(680, xStart * 2 + Math.max(0, slots.length - 1) * xGap);
+    const maxLane = threads.length ? Math.max(...threads.map(name => laneOf[name] || 0)) : 0;
+    const height = yStart + maxLane * laneGap + 40;
+    return { lines, sharedNodes, width, height };
+  }, [cards, entriesByThread, threads, threadLanes]);
+
+  const addNewThread = () => { setNewThreadName(''); setNewThreadOpen(true); };
+  const commitNewThread = () => {
+    const trimmed = newThreadName.trim();
+    if (!trimmed) return;
+    if (!threads.includes(trimmed)) setState(s => ({ ...s, threads: [...s.threads, trimmed] }));
+    setNewThreadOpen(false);
+  };
+
+  const doClearThreads = () => {
+    setState(s => {
+      const clearedCards = s.cards.map(c => ({ ...c, tags: c.tags.filter(t => t.type !== 'Thread') }));
+      if (clearMode === 'hubs') return { ...s, cards: clearedCards, threads: [], threadNotes: {} };
+      return { ...s, cards: clearedCards };
+    });
+    setClearOpen(false);
+    setSelectedThread(null);
+  };
+
+  const openManage = (name) => { setManageThread(name); };
+
+  const renameThread = (oldName, newName) => {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) return;
+    if (threads.includes(trimmed)) { window.alert('A thread with that name already exists.'); return; }
+    setState(s => ({
+      ...s,
+      threads: s.threads.map(t => t === oldName ? trimmed : t),
+      threadNotes: (() => {
+        const next = { ...(s.threadNotes || {}) };
+        if (oldName in next) { next[trimmed] = next[oldName]; delete next[oldName]; }
+        return next;
+      })(),
+      threadColors: (() => {
+        const next = { ...(s.threadColors || {}) };
+        if (oldName in next) { next[trimmed] = next[oldName]; delete next[oldName]; }
+        return next;
+      })(),
+      threadLanes: (() => {
+        const next = { ...(s.threadLanes || {}) };
+        if (oldName in next) { next[trimmed] = next[oldName]; delete next[oldName]; }
+        return next;
+      })(),
+      cards: s.cards.map(c => ({
+        ...c,
+        tags: (c.tags || []).map(t => (t.type === 'Thread' && t.note === oldName) ? { ...t, note: trimmed } : t),
+      })),
+    }));
+    if (selectedThread === oldName) setSelectedThread(trimmed);
+    setManageThread(trimmed);
+  };
+  const setThreadColorOverride = (name, hex) => setState(s => ({ ...s, threadColors: { ...(s.threadColors || {}), [name]: hex } }));
+
+  const deleteThread = (name) => {
+    setState(s => ({
+      ...s,
+      threads: s.threads.filter(t => t !== name),
+      threadNotes: (() => { const next = { ...(s.threadNotes || {}) }; delete next[name]; return next; })(),
+      threadColors: (() => { const next = { ...(s.threadColors || {}) }; delete next[name]; return next; })(),
+      threadLanes: (() => { const next = { ...(s.threadLanes || {}) }; delete next[name]; return next; })(),
+      cards: s.cards.map(c => ({ ...c, tags: (c.tags || []).filter(t => !(t.type === 'Thread' && t.note === name)) })),
+    }));
+    if (selectedThread === name) setSelectedThread(null);
+    setManageThread(null);
+  };
+
+  const addThreadRole = (threadName, cardId, role, stepNum) => setState(s => ({
+    ...s, cards: s.cards.map(c => c.id === cardId
+      ? { ...c, tags: [...c.tags, { id: uid(), type: 'Thread', role, note: threadName }] }
+      : c),
+  }));
+  const createAndAddRole = (threadName, title, role, stepNum) => {
+    const defaultChapterId = (chapters[chapters.length - 1] && chapters[chapters.length - 1].id) || null;
+    setState(s => ({
+      ...s, cards: [...s.cards, {
+        id: uid(), act: null, gapIndex: null, chapterId: defaultChapterId, title, text: '', notes: '',
+        tags: [{ id: uid(), type: 'Thread', role, note: threadName }],
+        values: [], placeholder: GENERIC_PLACEHOLDER, customColor: null, major: false,
+      }],
+    }));
+  };
+  const removeThreadTag = (cardId, tagId) => setState(s => ({
+    ...s, cards: s.cards.map(c => c.id === cardId ? { ...c, tags: c.tags.filter(t => t.id !== tagId) } : c),
+  }));
+  const updateThreadNotes = (name, text) => setState(s => ({ ...s, threadNotes: { ...s.threadNotes, [name]: text } }));
+
+  const dataFor = (name) => {
+    const list = entriesByThread[name] || [];
+    return {
+      setups: list.filter(e => e.role === 'setup').map(e => e.cardId),
+      payoffs: list.filter(e => e.role === 'payoff').map(e => e.cardId),
+      steps: list.filter(e => e.role === 'step').map(e => ({ cardId: e.cardId, step: e.step || 1 })),
+    };
+  };
+
+  const pillStyle = (name, resolved) => ({
+    display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '5px 6px', borderRadius: 6,
+    cursor: 'pointer', color: resolved ? '#999' : '#222',
+    background: selectedThread === name ? '#eee' : 'transparent',
+  });
+  const nodeStyle = (color) => ({
+    borderRadius: 7, padding: '7px 12px', fontSize: 11.5, fontWeight: 600, color: '#fff',
+    whiteSpace: 'nowrap', cursor: 'pointer', background: color,
+  });
+
+  return (
+    <div style={{ padding: '12px 16px' }}>
+      <HelpNote on={help}>A thread needs at least a setup and a payoff (steps in between are optional). Swimlanes shows each thread as its own row; Web shows them converging on cards that share more than one thread.</HelpNote>
+      <div style={{ border: '1px solid #eee', borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', borderBottom: '1px solid #eee' }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Thread Library</div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <SegButtons value={display} onChange={setDisplay} options={[['swim', 'Swimlanes'], ['web', 'Web']]} />
+            <button onClick={addNewThread} style={btnStyle}>+ New thread</button>
+            <button onClick={() => { setClearMode('links'); setClearOpen(true); }}
+              style={{ ...btnStyle, borderColor: '#D85A30', color: '#D85A30' }}>Clear Threads…</button>
+          </div>
+        </div>
+        <div style={{ display: 'flex' }}>
+          <div style={{ width: 190, flexShrink: 0, borderRight: '1px solid #eee', background: '#fafafa', padding: 10 }}>
+            <div style={{ fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.04em', color: '#999', margin: '4px 0' }}>Open</div>
+            {openNames.length === 0 && <div style={{ fontSize: 11, color: '#bbb' }}>None</div>}
+            {openNames.map(n => (
+              <div key={n} style={pillStyle(n, false)} onClick={() => setSelectedThread(selectedThread === n ? null : n)}
+                onDoubleClick={(e) => { e.stopPropagation(); openManage(n); }} title="Double-click to rename or delete">
+                <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: threadColor(n) }} />
+                {n}
+              </div>
+            ))}
+            <div style={{ fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.04em', color: '#999', margin: '10px 0 4px' }}>Resolved</div>
+            {resolvedNames.length === 0 && <div style={{ fontSize: 11, color: '#bbb' }}>None</div>}
+            {resolvedNames.map(n => (
+              <div key={n} style={pillStyle(n, true)} onClick={() => setSelectedThread(selectedThread === n ? null : n)}
+                onDoubleClick={(e) => { e.stopPropagation(); openManage(n); }} title="Double-click to rename or delete">
+                <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: threadColor(n) }} />
+                {n}
+              </div>
+            ))}
+          </div>
+          <div ref={webWrapRef} style={{ flex: 1, padding: '18px 22px', overflowX: 'auto', position: 'relative' }}
+            onMouseLeave={() => setHoverPoint(null)}>
+            {threads.length === 0 && <div style={{ fontSize: 12, color: '#999' }}>No threads yet — tag a card as a Thread setup or payoff first.</div>}
+            {display === 'swim' && threads.map(name => {
+              const entries = entriesByThread[name] || [];
+              const color = threadColor(name);
+              const resolved = isResolved(name);
+              const dimmed = selectedThread && selectedThread !== name;
+              return (
+                <div key={name} style={{ display: 'flex', alignItems: 'center', marginBottom: 22, minWidth: 640, opacity: dimmed ? 0.3 : 1 }}>
+                  <div style={{ width: 130, flexShrink: 0, fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                    onDoubleClick={() => openManage(name)} title="Double-click to rename or delete">
+                    <span style={{ width: 9, height: 9, borderRadius: '50%', flexShrink: 0, background: color }} />
+                    {name}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
+                    {entries.length === 0 && <span style={{ fontSize: 11.5, color: '#bbb' }}>No links yet</span>}
+                    {entries.map((e, i) => (
+                      <React.Fragment key={e.tagId}>
+                        {i > 0 && <div style={{ height: 2, width: 26, flexShrink: 0, background: color }} />}
+                        <div style={nodeStyle(color)} title={e.chapter} onClick={() => setPopupCard(e.cardId)}>
+                          {e.role === 'setup' ? 'Setup' : e.role === 'step' ? `Step ${e.step || 1}` : 'Payoff'} — {e.title}
+                        </div>
+                      </React.Fragment>
+                    ))}
+                    {!resolved && entries.length > 0 && (
+                      <>
+                        <div style={{ height: 0, width: 26, flexShrink: 0, borderTop: '2px dashed #ccc' }} />
+                        <div style={{ borderRadius: 7, padding: '7px 12px', fontSize: 11.5, fontWeight: 500, color: '#aaa', border: '1.5px dashed #ccc', whiteSpace: 'nowrap' }}
+                          title="Tag a card as this thread's payoff to close the loop">+ add payoff</div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {display === 'web' && threads.length > 0 && (
+              <svg width={webLayout.width} height={webLayout.height} style={{ display: 'block' }}>
+                {webLayout.lines.map(l => (
+                  <polyline key={l.name} points={l.points.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke={l.color} strokeWidth="2"
+                    opacity={selectedThread && selectedThread !== l.name ? 0.2 : 1} />
+                ))}
+                {webLayout.lines.map(l => (
+                  <text key={'lbl-' + l.name} x="8" y={l.laneY + 4} style={{ fontSize: 11, fontWeight: 600, fill: l.color, cursor: 'pointer' }}
+                    opacity={selectedThread && selectedThread !== l.name ? 0.35 : 1}
+                    onDoubleClick={() => openManage(l.name)}>
+                    <title>Double-click to rename or delete</title>
+                    {l.name}
+                  </text>
+                ))}
+                {webLayout.lines.map(l => l.points.filter(p => !p.shared).map(p => (
+                  <circle key={l.name + '-' + p.entry.cardId} cx={p.x} cy={p.y} r="6" fill={l.color}
+                    opacity={selectedThread && selectedThread !== l.name ? 0.2 : 1}
+                    style={{ cursor: 'pointer' }} onClick={() => setPopupCard(p.entry.cardId)}
+                    onMouseEnter={(e) => {
+                      const rect = webWrapRef.current.getBoundingClientRect();
+                      const text = (p.entry.role === 'setup' ? 'Setup' : p.entry.role === 'step' ? `Step ${p.entry.step || 1}` : 'Payoff') + ' — ' + p.entry.title;
+                      setHoverPoint({ x: e.clientX - rect.left, y: e.clientY - rect.top, text });
+                    }}
+                    onMouseLeave={() => setHoverPoint(null)} />
+                )))}
+                {webLayout.sharedNodes.map(p => {
+                  const selectedCardIds = selectedThread ? new Set((entriesByThread[selectedThread] || []).map(e => e.cardId)) : null;
+                  const dimmed = selectedThread && !selectedCardIds.has(p.entry.cardId);
+                  return (
+                    <circle key={'shared-' + p.entry.cardId} cx={p.x} cy={p.y} r="8" fill="#888780"
+                      opacity={dimmed ? 0.2 : 1}
+                      style={{ cursor: 'pointer' }} onClick={() => setPopupCard(p.entry.cardId)}
+                      onMouseEnter={(e) => {
+                        const rect = webWrapRef.current.getBoundingClientRect();
+                        setHoverPoint({ x: e.clientX - rect.left, y: e.clientY - rect.top, text: p.entry.title });
+                      }}
+                      onMouseLeave={() => setHoverPoint(null)} />
+                  );
+                })}
+              </svg>
+            )}
+            {hoverPoint && (
+              <div style={{
+                position: 'absolute', left: hoverPoint.x, top: hoverPoint.y, transform: 'translate(-50%, -130%)',
+                background: '#222', color: '#fff', fontSize: 11.5, padding: '4px 9px', borderRadius: 6,
+                whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 30, boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+              }}>
+                {hoverPoint.text}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {clearOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+          onClick={() => setClearOpen(false)}>
+          <div style={{ background: '#fff', borderRadius: 10, width: 340, padding: 20, boxShadow: '0 8px 30px rgba(0,0,0,0.25)' }}
+            onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 6px', fontSize: 15, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ color: '#D85A30' }}>⚠</span> Clear Threads
+            </h3>
+            <p style={{ fontSize: 12.5, color: '#555', margin: '0 0 16px', lineHeight: 1.5 }}>This can't be undone. Choose what to remove:</p>
+            <label style={{
+              display: 'block', border: '1px solid ' + (clearMode === 'links' ? '#D85A30' : '#ddd'), borderRadius: 8, padding: '10px 12px',
+              marginBottom: 8, cursor: 'pointer', background: clearMode === 'links' ? '#FFF6F3' : '#fff',
+            }}>
+              <span style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input type="radio" checked={clearMode === 'links'} onChange={() => setClearMode('links')} /> Clear links only
+              </span>
+              <span style={{ fontSize: 11.5, color: '#999', display: 'block', margin: '4px 0 0 22px', lineHeight: 1.4 }}>
+                Removes setup/payoff connections between cards. Thread names stay, so you can re-link later.
+              </span>
+            </label>
+            <label style={{
+              display: 'block', border: '1px solid ' + (clearMode === 'hubs' ? '#D85A30' : '#ddd'), borderRadius: 8, padding: '10px 12px',
+              marginBottom: 8, cursor: 'pointer', background: clearMode === 'hubs' ? '#FFF6F3' : '#fff',
+            }}>
+              <span style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input type="radio" checked={clearMode === 'hubs'} onChange={() => setClearMode('hubs')} /> Clear hubs & links
+              </span>
+              <span style={{ fontSize: 11.5, color: '#999', display: 'block', margin: '4px 0 0 22px', lineHeight: 1.4 }}>
+                Removes the links above and deletes the threads themselves from the library.
+              </span>
+            </label>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+              <button onClick={() => setClearOpen(false)} style={btnStyle}>Cancel</button>
+              <button onClick={doClearThreads} style={{ ...btnStyle, border: 'none', background: '#D85A30', color: '#fff' }}>
+                {clearMode === 'hubs' ? 'Clear hubs & links' : 'Clear links only'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {newThreadOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+          onClick={() => setNewThreadOpen(false)}>
+          <div style={{ background: '#fff', borderRadius: 10, width: 320, padding: 20, boxShadow: '0 8px 30px rgba(0,0,0,0.25)' }}
+            onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 14px', fontSize: 15 }}>New thread</h3>
+            <label style={{ fontSize: 11.5, color: '#999', display: 'block', marginBottom: 4 }}>Name</label>
+            <input autoFocus value={newThreadName} onChange={e => setNewThreadName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') commitNewThread(); }}
+              style={{ fontSize: 13, border: '1px solid #ddd', borderRadius: 8, padding: '6px 10px', width: '100%', boxSizing: 'border-box', marginBottom: 16 }} />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setNewThreadOpen(false)} style={btnStyle}>Cancel</button>
+              <button onClick={commitNewThread} style={{ ...btnStyle, border: 'none', background: '#222', color: '#fff' }}>Add</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {manageThread && (
+        <ThreadEditPopup
+          name={manageThread} data={dataFor(manageThread)}
+          cards={cards} color={threadColor(manageThread)}
+          colorOverride={(threadColors && threadColors[manageThread]) || null}
+          onColorChange={hex => setThreadColorOverride(manageThread, hex)}
+          notes={(threadNotes && threadNotes[manageThread]) || ''}
+          allowRoleEdit={display === 'swim'}
+          onClose={() => setManageThread(null)}
+          onRename={newName => renameThread(manageThread, newName)}
+          onAddRole={(cardId, role, stepNum) => addThreadRole(manageThread, cardId, role, stepNum)}
+          onCreateAndAddRole={(title, role, stepNum) => createAndAddRole(manageThread, title, role, stepNum)}
+          onRemoveTag={(cardId, tagId) => removeThreadTag(cardId, tagId)}
+          onDelete={() => deleteThread(manageThread)}
+          onNotesChange={text => updateThreadNotes(manageThread, text)}
+        />
+      )}
+
+      {popupCard && (
+        <CardEditModal
+          card={cards.find(c => c.id === popupCard)} cards={cards} onClose={() => setPopupCard(null)}
+          updateCard={p => updateCard(popupCard, p)} onNudge={dir => nudgeCard(popupCard, dir)}
+          onDelete={() => setState(s => ({ ...s, cards: s.cards.filter(c => c.id !== popupCard) }))}
+          characters={characters} threads={threads} valuesLib={values} onAddThread={addLib('threads')}
+          tagTypes={tagTypes} onAddTagType={addLib('tagTypes')}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ============================== TOP-LEVEL APP ============================== */
+
+const VIEWS = ['Scene', 'Flowchart', 'Ring', 'Arc Chart', 'Threads', 'Words']; // Circle is reachable via a link from Ring, not a top-level tab
+
+function PlotTool() {
+  const [state, setState] = useState(() => {
+    const chapters = freshDefaultChapters();
+    return { cards: freshDefaultCards(chapters[0].id), characters: [], themes: [], values: [], threads: [], tagTypes: [], threadNotes: {}, threadColors: {}, threadLanes: {}, chapters, circleStages: CIRCLE_STAGES, circleStagesHidden: false };
+  });
+  const [view, setView] = useState('Scene');
+  const [fileName, setFileName] = useState(null);
+  const [pinnedIds, setPinnedIds] = useState([]); // Circle stacking order — lifted here so it survives view switches
+  const [activeChapterId, setActiveChapterId] = useState('all'); // lifted so the chapter filter survives view switches
+  const [expandedChapterIds, setExpandedChapterIds] = useState(() => state.chapters.map(ch => ch.id)); // lifted so Flowchart's expand/collapse survives view switches
+  const [reorderOpen, setReorderOpen] = useState(false);
+  const [helpOn, setHelpOn] = useState(false); // global show/hide for inline help notes, not saved to the file
+  const fileInputRef = useRef(null);
+  useEffect(() => { document.title = state.title ? `${state.title} — Story Shape` : 'Story Shape'; }, [state.title]);
+
+  // Newly created chapters start expanded, since the user is presumably about to work on it.
+  const addChapter = (title) => {
+    const chapter = { id: uid(), title };
+    setState(s => ({ ...s, chapters: [...s.chapters, chapter], cards: [...s.cards, ...freshDefaultCards(chapter.id)] }));
+    setExpandedChapterIds(prev => [...prev, chapter.id]);
+  };
+
+  const handleExport = () => {
+    const md = cardsToMarkdown(state);
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const safe = (state.title || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').replace(/\s+/g, ' ').trim();
+    const name = (safe || 'story-plot') + '.md';
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setFileName(name);
+  };
+
+  const handleImportClick = () => fileInputRef.current && fileInputRef.current.click();
+  const handleImportFile = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const parsed = markdownToCards(ev.target.result);
+      setState({ ...parsed, title: parsed.title || file.name.replace(/\.md$/i, '') });
+      setFileName(file.name);
+      setActiveChapterId('all');
+      setExpandedChapterIds(parsed.chapters.map(ch => ch.id));
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const [startOverOpen, setStartOverOpen] = useState(false);
+  const doStartOver = () => {
+    const chapters = freshDefaultChapters();
+    setState({ cards: freshDefaultCards(chapters[0].id), characters: [], themes: [], values: [], threads: [], tagTypes: [], threadNotes: {}, threadColors: {}, threadLanes: {}, chapters, circleStages: CIRCLE_STAGES, circleStagesHidden: false, title: '' });
+    setFileName(null);
+    setActiveChapterId('all');
+    setExpandedChapterIds(chapters.map(ch => ch.id));
+    setStartOverOpen(false);
+  };
+
+  return (
+    <div style={{ fontFamily: 'system-ui, sans-serif', color: '#222', maxWidth: 1400, margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', borderBottom: '1px solid #eee', flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {VIEWS.map(v => (
+            <button key={v} onClick={() => setView(v)}
+              style={{ ...btnStyle, background: view === v ? '#333' : '#fff', color: view === v ? '#fff' : '#333' }}>
+              {v}
+            </button>
+          ))}
+          <button onClick={() => setHelpOn(h => !h)}
+            style={{ ...btnStyle, background: helpOn ? '#333' : '#fff', color: helpOn ? '#fff' : '#333' }}
+            title="Show or hide short explanatory notes next to the controls">? Help</button>
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
+          <input value={state.title || ''} onChange={e => setState(s => ({ ...s, title: e.target.value }))} placeholder="Untitled plot" title="Plot title — also used as the exported file name"
+            style={{ fontSize: 16, fontWeight: 600, width: 240, border: 'none', borderBottom: '1px solid #ddd', background: 'transparent', padding: '2px 4px' }} />
+          <button onClick={handleImportClick} style={btnStyle}>Import .md</button>
+          <input ref={fileInputRef} type="file" accept=".md,text/markdown" style={{ display: 'none' }} onChange={handleImportFile} />
+          <button onClick={handleExport} style={btnStyle}>Export .md</button>
+          <button onClick={() => setStartOverOpen(true)} style={btnStyle}>Start Over</button>
+        </div>
+      </div>
+
+      <WordMeter cards={state.cards} goal={state.wordGoal || 0} onGoal={g => setState(s => ({ ...s, wordGoal: g }))} onOpen={() => setView('Words')} />
+
+      {startOverOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+          onClick={() => setStartOverOpen(false)}>
+          <div style={{ background: '#fff', borderRadius: 10, width: 340, padding: 20, boxShadow: '0 8px 30px rgba(0,0,0,0.25)' }}
+            onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 6px', fontSize: 15, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ color: '#D85A30' }}>⚠</span> Start Over
+            </h3>
+            <p style={{ fontSize: 12.5, color: '#555', margin: '0 0 16px', lineHeight: 1.5 }}>
+              This clears all current data — chapters, cards, characters, threads, everything. Unsaved changes will be lost. This can't be undone.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setStartOverOpen(false)} style={btnStyle}>Cancel</button>
+              <button onClick={doStartOver} style={{ ...btnStyle, border: 'none', background: '#D85A30', color: '#fff' }}>Start Over</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ChapterBar
+        chapters={state.chapters} activeChapterId={activeChapterId} setActiveChapterId={setActiveChapterId}
+        onAddChapter={addChapter} reorderOpen={reorderOpen} setReorderOpen={setReorderOpen} help={helpOn}
+      />
+      {reorderOpen && (
+        <ChapterReorderPanel chapters={state.chapters} cards={state.cards} setState={setState} activeChapterId={activeChapterId} setActiveChapterId={setActiveChapterId} setExpandedChapterIds={setExpandedChapterIds} />
+      )}
+
+      {view === 'Scene' && <SceneView state={state} setState={setState} chapterFilter={activeChapterId} help={helpOn} />}
+      {view === 'Flowchart' && <FlowchartView state={state} setState={setState} chapterFilter={activeChapterId} expandedChapterIds={expandedChapterIds} setExpandedChapterIds={setExpandedChapterIds} help={helpOn} />}
+      {view === 'Ring' && <RingView state={state} setState={setState} chapterFilter={activeChapterId} onOpenClassic={() => setView('Circle')} help={helpOn} />}
+      {view === 'Circle' && <CircleView state={state} setState={setState} pinnedIds={pinnedIds} setPinnedIds={setPinnedIds} chapterFilter={activeChapterId} onBackToRing={() => setView('Ring')} help={helpOn} />}
+      {view === 'Arc Chart' && <ArcChartView state={state} chapterFilter={activeChapterId} help={helpOn} />}
+      {view === 'Threads' && <ThreadLibraryView state={state} setState={setState} help={helpOn} />}
+      {view === 'Words' && <WordCountView state={state} setState={setState} chapterFilter={activeChapterId} help={helpOn} />}
+    </div>
+  );
+}
+
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(PlotTool));
+</script></body></html>
